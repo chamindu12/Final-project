@@ -1,16 +1,17 @@
+# Containerized Network Services - core services, dashboard API, hardening
 # Start:  docker compose up -d --build
 # Stop:   docker compose down
 
 name: netlab
 
 networks:
-  lab_net:                     # main network for all services
+  lab_net:
     name: lab_net
     driver: bridge
     ipam:
       config:
         - subnet: 172.20.0.0/24
-  isolated_net:                # separate network, used to PROVE isolation
+  isolated_net:
     name: isolated_net
     driver: bridge
     ipam:
@@ -18,9 +19,8 @@ networks:
         - subnet: 172.21.0.0/24
 
 services:
-  # ---------- 1. Web server ----------
   nginx-web:
-    image: nginxinc/nginx-unprivileged:1.27-alpine   # runs as non-root (uid 101), port 8080
+    image: nginxinc/nginx-unprivileged:1.27-alpine
     container_name: nginx-web
     restart: unless-stopped
     networks:
@@ -44,8 +44,7 @@ services:
       retries: 3
       start_period: 5s
 
-  # ---------- 2. DNS resolver ----------
-  dns:
+  dnsmasq:
     build: ./services/dns
     image: netlab/dnsmasq:1.0
     container_name: dnsmasq
@@ -54,7 +53,7 @@ services:
       lab_net:
         ipv4_address: 172.20.0.53
     ports:
-      - "127.0.0.1:5353:5353/udp"   
+      - "127.0.0.1:5353:5353/udp"
     read_only: true
     tmpfs:
       - /tmp
@@ -71,13 +70,44 @@ services:
       retries: 3
       start_period: 5s
 
-  # ---------- 3. Reverse proxy ----------
-  reverse-proxy:
+  dashboard:
+    build: ./dashboard
+    image: netlab/dashboard:1.0
+    container_name: dashboard
+    restart: unless-stopped
+    networks:
+      lab_net:
+        ipv4_address: 172.20.0.20
+    group_add:
+      - "${DOCKER_GID:-999}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      COMPOSE_PROJECT: netlab
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  nginx-proxy:
     image: nginxinc/nginx-unprivileged:1.27-alpine
     container_name: nginx-proxy
     restart: unless-stopped
     depends_on:
       nginx-web:
+        condition: service_healthy
+      dashboard:
         condition: service_healthy
     networks:
       lab_net:
@@ -102,7 +132,6 @@ services:
       retries: 3
       start_period: 5s
 
-  # ---------- 4. Isolation test container (not on lab_net) ----------
   isolated-test:
     image: alpine:3.20
     container_name: isolated-test
