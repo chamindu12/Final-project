@@ -18,6 +18,18 @@ jobs:
           failure-threshold: warning
           ignore: DL3018
 
+      - name: Lint dashboard Dockerfile (hadolint)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: dashboard/Dockerfile
+          failure-threshold: warning
+
+      - name: Python lint and unit tests
+        run: |
+          pip install -r dashboard/requirements.txt flake8 pytest
+          flake8 dashboard/app.py tests --max-line-length=100
+          pytest tests -q
+
       - name: Validate compose file
         run: |
           cp .env.example .env
@@ -44,7 +56,10 @@ jobs:
       - name: Smoke test web server through reverse proxy
         run: |
           curl -fsS http://localhost:8080/healthz
-          curl -fsS http://localhost:8080/ | grep -q "Hello from nginx-web"
+          curl -fsSI http://localhost:8080/ | grep -qi "^Location: /dashboard/"
+
+      - name: Smoke test dashboard page
+        run: curl -fsS http://localhost:8080/dashboard/ | grep -q "NetLab Control"
 
       - name: Test custom DNS
         run: |

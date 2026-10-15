@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Container Network Services | Control</title>
+  <link rel="stylesheet" href="static/vendor/bootstrap.min.css">
+  <link rel="stylesheet" href="static/css/app.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+      </div>
+      <div>
+        <div class="brand-name">NetLab Control</div>
+        <div class="brand-sub">Containerised network services</div>
+      </div>
+    </div>
+    <div class="nav-label">Manage</div>
+    <nav class="nav-list">
+      <a href="#top" class="active">Overview</a>
+      <a href="#containers">Containers</a>
+      <a href="#resources">Resources</a>
+      <a href="#logs">Logs</a>
+    </nav>
+    <div class="side-foot">
+      <div><span class="dot" id="engineDot"></span> <strong>docker-engine</strong></div>
+      <div class="small" id="engineText">connecting...</div>
+      <div class="small">project: <span class="mono">{{ project }}</span></div>
+    </div>
+  </aside>
+
+  <main id="top">
+    <header class="topbar">
+      <div>
+        <h1>Overview</h1>
+        <p>Real-time status of the containerised network services</p>
+      </div>
+      <div class="pill" id="livePill"><span class="dot"></span><span id="liveText">Connecting...</span></div>
+    </header>
+
+    <div id="alertBox"></div>
+
+    <section class="kpis">
+      <div class="kpi">
+        <div class="kpi-l">Containers running</div>
+        <div class="kpi-v" id="kpiRunning">-</div>
+        <div class="kpi-s" id="kpiRunningSub"></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">Unhealthy</div>
+        <div class="kpi-v" id="kpiUnhealthy">-</div>
+        <div class="kpi-s">from Docker health checks</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">Total CPU / memory</div>
+        <div class="kpi-v" id="kpiUsage">-</div>
+        <div class="kpi-s" id="kpiUsageSub">100% CPU = one core</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">Automatic restarts</div>
+        <div class="kpi-v" id="kpiRestarts">-</div>
+        <div class="kpi-s">since the containers were created</div>
+      </div>
+    </section>
+
+    <section class="panel" id="containers">
+      <div class="panel-h">
+        <h2>Containers <span class="count" id="countBadge">0 total</span></h2>
+        <span class="muted">Docker SDK &middot; auto-refresh 3 s &middot; click a row to inspect it</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table ctable align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Container</th><th>Status</th><th>Health</th><th>IP address</th>
+              <th>Ports</th><th>CPU</th><th>Memory</th><th>Net KB/s</th><th class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"><tr><td colspan="9" class="muted p-4">Loading containers...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="two" id="resources">
+      <div class="panel">
+        <div class="panel-h">
+          <h2>Resource usage <span class="count mono" id="chartTitle">-</span></h2>
+          <span class="muted">since this page was opened</span>
+        </div>
+        <div class="chart-wrap"><canvas id="chartCanvas"></canvas></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><h2>Details</h2></div>
+        <div class="p-3" id="details"><span class="muted">Select a container.</span></div>
+        <div class="panel-h sub-h"><h2>Hardening</h2></div>
+        <ul class="checks" id="hardening"></ul>
+      </div>
+    </section>
+
+    <section class="panel" id="logs">
+      <div class="panel-h log-h">
+        <h2>Logs</h2>
+        <div class="log-tools">
+          <select id="logContainer" class="form-select form-select-sm" aria-label="Container"></select>
+          <select id="logTail" class="form-select form-select-sm" aria-label="Lines">
+            <option value="50">Last 50 lines</option>
+            <option value="100" selected>Last 100 lines</option>
+            <option value="200">Last 200 lines</option>
+            <option value="500">Last 500 lines</option>
+          </select>
+          <input id="logFilter" class="form-control form-control-sm" type="search" placeholder="Filter lines...">
+          <div class="form-check form-switch m-0">
+            <input class="form-check-input" type="checkbox" id="logFollow" checked>
+            <label class="form-check-label" for="logFollow">Follow</label>
+          </div>
+          <button class="btn btn-sm btn-outline-secondary" id="logRefresh" type="button">Refresh</button>
+        </div>
+      </div>
+      <div class="logbox" id="logBox">Select a container.</div>
+      <div class="log-meta muted" id="logMeta"></div>
+    </section>
+  </main>
+</div>
+
+<div id="toasts" aria-live="polite"></div>
+
+<script src="static/vendor/chart.umd.js"></script>
+<script src="static/js/app.js"></script>
+</body>
+</html>
