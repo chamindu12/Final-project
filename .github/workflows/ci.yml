@@ -7,9 +7,9 @@ on:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Lint Dockerfile (hadolint)
         uses: hadolint/hadolint-action@v3.1.0
@@ -37,9 +37,9 @@ jobs:
 
   build-and-test:
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Create .env from example
         run: cp .env.example .env
@@ -53,13 +53,29 @@ jobs:
       - name: Show container status
         run: docker compose ps
 
-      - name: Smoke test web server through reverse proxy
+      - name: Smoke test reverse proxy
         run: |
           curl -fsS http://localhost:8080/healthz
-          curl -fsSI http://localhost:8080/ | grep -qi "^Location: /dashboard/"
+          curl -sI http://localhost:8080/ | head -1 | grep -E ' (301|302) '
+          curl -sI http://localhost:8080/ | grep -i '^location: /dashboard/'
+          curl -fsS http://localhost:8080/web/ | grep -q "Hello from nginx-web"
 
-      - name: Smoke test dashboard page
-        run: curl -fsS http://localhost:8080/dashboard/ | grep -q "NetLab Control"
+      - name: Smoke test dashboard page and API
+        run: |
+          curl -fsS http://localhost:8080/dashboard/ | grep -q "NetLab Control"
+          curl -fsS http://localhost:8080/dashboard/api/health | grep -q '"status":"ok"'
+
+      - name: Check dashboard files are served
+        run: |
+          check() {
+            size=$(curl -fsS "http://localhost:8080/dashboard/static/$1" | wc -c)
+            echo "$1: $size bytes"
+            [ "$size" -ge "$2" ]
+          }
+          check vendor/chart.umd.js 150000
+          check vendor/bootstrap.min.css 150000
+          check js/app.js 5000
+          check css/app.css 2000
 
       - name: Test custom DNS
         run: |
