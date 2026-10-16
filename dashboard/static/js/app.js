@@ -216,6 +216,7 @@
 
   /* ---------- chart ---------- */
   let chart = null;
+  let networkChart = null;
   if (window.Chart) {
     chart = new window.Chart($("chartCanvas"), {
       type: "line",
@@ -238,16 +239,44 @@
         plugins: { legend: { position: "bottom" } },
       },
     });
+    networkChart = new window.Chart($("networkChartCanvas"), {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
+          { label: "Received", data: [], borderColor: "#2563eb", backgroundColor: "rgba(37,99,235,.10)",
+            fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          { label: "Sent", data: [], borderColor: "#d97706", backgroundColor: "rgba(217,119,6,.08)",
+            fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 },
+        ],
+      },
+      options: {
+        animation: false, responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        scales: {
+          y: { beginAtZero: true, ticks: { callback: (v) => v + " KB/s" } },
+          x: { ticks: { maxTicksLimit: 6 } },
+        },
+        plugins: { legend: { position: "bottom" } },
+      },
+    });
   }
 
   function refreshChart() {
     $("chartTitle").textContent = state.selected || "-";
-    if (!chart) return;
     const h = state.history[state.selected] || { t: [], cpu: [], mem: [] };
-    chart.data.labels = h.t.slice();
-    chart.data.datasets[0].data = h.cpu.slice();
-    chart.data.datasets[1].data = h.mem.slice();
-    chart.update("none");
+    if (chart) {
+      chart.data.labels = h.t.slice();
+      chart.data.datasets[0].data = h.cpu.slice();
+      chart.data.datasets[1].data = h.mem.slice();
+      chart.update("none");
+    }
+    if (networkChart) {
+      networkChart.data.labels = h.t.slice();
+      networkChart.data.datasets[0].data = (h.rx || []).slice();
+      networkChart.data.datasets[1].data = (h.tx || []).slice();
+      networkChart.update("none");
+    }
   }
 
   /* ---------- polling: containers ---------- */
@@ -296,21 +325,28 @@
     Object.keys(state.stats).forEach((name) => {
       const s = state.stats[name];
       if (!s.running) { delete state.lastNet[name]; delete state.rates[name]; return; }
-      const h = state.history[name] || (state.history[name] = { t: [], cpu: [], mem: [] });
-      h.t.push(new Date(d.ts * 1000).toLocaleTimeString([], { hour12: false }));
-      h.cpu.push(s.cpu_percent);
-      h.mem.push(s.mem_percent);
-      if (h.t.length > HISTORY_POINTS) { h.t.shift(); h.cpu.shift(); h.mem.shift(); }
-
       const prev = state.lastNet[name];
+      let rate = null;
       if (prev && s.net_rx_bytes >= prev.rx && s.net_tx_bytes >= prev.tx && d.ts - prev.ts > 0.2) {
         const dt = d.ts - prev.ts;
-        state.rates[name] = {
+        rate = {
           rx: (s.net_rx_bytes - prev.rx) / 1024 / dt,
           tx: (s.net_tx_bytes - prev.tx) / 1024 / dt,
         };
+        state.rates[name] = rate;
       }
       state.lastNet[name] = { rx: s.net_rx_bytes, tx: s.net_tx_bytes, ts: d.ts };
+
+      const h = state.history[name] ||
+        (state.history[name] = { t: [], cpu: [], mem: [], rx: [], tx: [] });
+      h.t.push(new Date(d.ts * 1000).toLocaleTimeString([], { hour12: false }));
+      h.cpu.push(s.cpu_percent);
+      h.mem.push(s.mem_percent);
+      h.rx.push(rate ? rate.rx : null);
+      h.tx.push(rate ? rate.tx : null);
+      if (h.t.length > HISTORY_POINTS) {
+        h.t.shift(); h.cpu.shift(); h.mem.shift(); h.rx.shift(); h.tx.shift();
+      }
     });
   }
 
