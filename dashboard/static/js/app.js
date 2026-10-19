@@ -7,7 +7,10 @@
   const LIST_MS = 3000;
   const STATS_GAP_MS = 1000;
   const LOG_MS = 2000;
-  const HISTORY_POINTS = 60;
+  const MONITORING_MS = 10000;
+  const HISTORY_MS = 15 * 60 * 1000;
+  const MAX_CONTIGUOUS_GAP_MS = 5000;
+  const DEFAULT_HISTORY_MINUTES = 5;
   const PAST = { start: "started", stop: "stopped", restart: "restarted" };
 
   const state = {
@@ -15,7 +18,10 @@
     stats: {},
     rates: {},
     lastNet: {},
+    netBreakPending: new Set(),
+    restartMeta: {},
     history: {},
+    monitoring: null,
     selected: null,
     pending: new Set(),
     lastOk: 0,
@@ -159,22 +165,77 @@
     $("kpiUsage").innerHTML = got
       ? cpu.toFixed(1) + " <small>%</small> &middot; " + mem.toFixed(0) + " <small>MB</small>" : "-";
     $("kpiUsageSub").textContent = limit
-      ? "of " + limit.toFixed(0) + " MB allocated by limits \u00b7 100% CPU = one core"
+      ? "of " + limit.toFixed(0) + " MB allocated by limits · 100% CPU = one core"
       : "100% CPU = one core";
 
     $("kpiRestarts").textContent = list.reduce((a, c) => a + (c.restart_count || 0), 0);
 
-    const box = $("alertBox");
+    const alerts = [];
     if (unhealthy.length) {
-      box.innerHTML = '<div class="banner bad"><strong>Unhealthy:</strong> ' +
-        unhealthy.map((c) => esc(c.name)).join(", ") +
-        ". Docker\u2019s health check is failing. Check the logs below.</div>";
-    } else if (down.length) {
-      box.innerHTML = '<div class="banner warn"><strong>Not running:</strong> ' +
-        down.map((c) => esc(c.name)).join(", ") + ".</div>";
-    } else {
-      box.innerHTML = "";
+      alerts.push({
+        severity: "bad",
+        title: "Unhealthy:",
+        message: unhealthy.map((c) => esc(c.name)).join(", ") +
+          ". Docker’s health check is failing. Check the logs below.",
+      });
     }
+    if (down.length) {
+      alerts.push({
+        severity: "warn",
+        title: "Not running:",
+        message: down.map((c) => esc(c.name)).join(", ") + ".",
+      });
+    }
+
+    if (state.monitoring) {
+      const p = state.monitoring.prometheus || {};
+      const g = state.monitoring.grafana || {};
+      if (p.state === "down") {
+        alerts.push({
+          severity: "bad", title: "Prometheus unreachable:",
+          message: "The Prometheus targets API could not be reached.",
+        });
+      } else if (p.state === "degraded") {
+        alerts.push({
+          severity: "warn", title: "Prometheus targets:",
+          message: (p.up || 0) + " of " + (p.total || 0) + " targets are up.",
+        });
+      }
+      if (g.state === "down") {
+        alerts.push({
+          severity: "bad", title: "Grafana unreachable:",
+          message: "The Grafana health endpoint could not be reached.",
+        });
+      } else if (g.state === "degraded") {
+        alerts.push({ severity: "warn", title: "Grafana degraded:", message: "Grafana did not report a healthy database." });
+      }
+    }
+
+    $("alertBox").innerHTML = alerts.map((a) =>
+      '<div class="banner ' + a.severity + '"><strong>' + a.title + "</strong> " + a.message + "</div>"
+    ).join("");
+  }
+
+  function renderMonitoring() {
+    if (!state.monitoring) return;
+    const p = state.monitoring.prometheus || { state: "down", up: 0, total: 0 };
+    const g = state.monitoring.grafana || { state: "down" };
+    const presentation = (status) => {
+      if (status === "up") return { cls: "ok", text: "Healthy" };
+      if (status === "degraded") return { cls: "warn", text: "Degraded" };
+      return { cls: "bad", text: "Unreachable" };
+    };
+    const ps = presentation(p.state);
+    const gs = presentation(g.state);
+    $("prometheusText").textContent = "Prometheus: " + (p.up || 0) + " of " + (p.total || 0) + " targets up";
+    $("prometheusBadge").className = "badge-s " + ps.cls;
+    $("prometheusBadge").textContent = ps.text;
+    $("prometheusService").className = "monitoring-service " + ps.cls;
+    $("grafanaText").textContent = g.state === "up" ? "Grafana is healthy" :
+      (g.state === "degraded" ? "Grafana database is not healthy" : "Grafana health check failed");
+    $("grafanaBadge").className = "badge-s " + gs.cls;
+    $("grafanaBadge").textContent = gs.text;
+    $("grafanaService").className = "monitoring-service " + gs.cls;
   }
 
   /* ---------- details and hardening ---------- */
@@ -214,19 +275,47 @@
       "</span><span>" + esc(i[1]) + "</span></li>").join("");
   }
 
-  /* ---------- chart ---------- */
+  /* ---------- charts: timestamp-based history ---------- */
   let chart = null;
   let networkChart = null;
+  let historyMinutes = DEFAULT_HISTORY_MINUTES;
+  let rateUnit = { label: "B/s", divisor: 1 };
+
+  function fmtChartTime(value) {
+    const date = new Date(Number(value));
+    return date.toLocaleTimeString([], {
+      hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+  }
+
+  function formatRate(value) {
+    if (value == null || !Number.isFinite(value)) return "—";
+    const magnitude = Math.abs(value);
+    if (magnitude >= 1024 * 1024) return (value / (1024 * 1024)).toFixed(2) + " MB/s";
+    if (magnitude >= 1024) return (value / 1024).toFixed(2) + " KB/s";
+    return (value < 10 ? value.toFixed(1) : value.toFixed(0)) + " B/s";
+  }
+
+  function buildSeries(items, key, isNetwork) {
+    const result = [];
+    items.forEach((item) => {
+      if (item.gapBefore || (isNetwork && item.netBreakBefore)) {
+        result.push({ x: item.breakAt || item.t - 1, y: null });
+      }
+      result.push({ x: item.t, y: item[key] });
+    });
+    return result;
+  }
+
   if (window.Chart) {
     chart = new window.Chart($("chartCanvas"), {
       type: "line",
       data: {
-        labels: [],
         datasets: [
           { label: "CPU %", data: [], borderColor: "#2563eb", backgroundColor: "rgba(37,99,235,.10)",
-            fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            fill: true, tension: 0, pointRadius: 0, borderWidth: 2, spanGaps: false, parsing: false },
           { label: "Memory %", data: [], borderColor: "#059669", backgroundColor: "rgba(5,150,105,.08)",
-            fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 },
+            fill: true, tension: 0, pointRadius: 0, borderWidth: 2, spanGaps: false, parsing: false },
         ],
       },
       options: {
@@ -234,47 +323,89 @@
         interaction: { mode: "index", intersect: false },
         scales: {
           y: { beginAtZero: true, suggestedMax: 10, ticks: { callback: (v) => v + "%" } },
-          x: { ticks: { maxTicksLimit: 6 } },
+          x: { type: "linear", ticks: { maxTicksLimit: 6, callback: (v) => fmtChartTime(v) } },
         },
-        plugins: { legend: { position: "bottom" } },
+        plugins: {
+          legend: { position: "bottom" },
+          tooltip: { callbacks: {
+            title: (items) => items.length ? fmtChartTime(items[0].parsed.x) : "",
+            label: (item) => item.dataset.label + ": " + item.parsed.y.toFixed(2) + "%",
+          } },
+        },
       },
     });
     networkChart = new window.Chart($("networkChartCanvas"), {
       type: "line",
       data: {
-        labels: [],
         datasets: [
-          { label: "Received", data: [], borderColor: "#2563eb", backgroundColor: "rgba(37,99,235,.10)",
-            fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 },
-          { label: "Sent", data: [], borderColor: "#d97706", backgroundColor: "rgba(217,119,6,.08)",
-            fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 },
+          { label: "Inbound", data: [], borderColor: "#2563eb", backgroundColor: "rgba(37,99,235,.10)",
+            fill: false, tension: 0, pointRadius: 0, borderWidth: 2, spanGaps: false, parsing: false },
+          { label: "Outbound", data: [], borderColor: "#d97706", backgroundColor: "rgba(217,119,6,.08)",
+            fill: false, tension: 0, pointRadius: 0, borderWidth: 2, spanGaps: false, parsing: false },
         ],
       },
       options: {
         animation: false, responsive: true, maintainAspectRatio: false,
         interaction: { mode: "index", intersect: false },
         scales: {
-          y: { beginAtZero: true, ticks: { callback: (v) => v + " KB/s" } },
-          x: { ticks: { maxTicksLimit: 6 } },
+          y: { beginAtZero: true, min: 0, suggestedMax: 1024,
+            ticks: { callback: (v) => (v / rateUnit.divisor).toFixed(rateUnit.divisor === 1 ? 0 : 2) + " " + rateUnit.label } },
+          x: { type: "linear", ticks: { maxTicksLimit: 6, callback: (v) => fmtChartTime(v) } },
         },
-        plugins: { legend: { position: "bottom" } },
+        plugins: {
+          legend: { position: "bottom" },
+          tooltip: { callbacks: {
+            title: (items) => items.length ? fmtChartTime(items[0].parsed.x) : "",
+            label: (item) => item.dataset.label + ": " + formatRate(item.parsed.y),
+          } },
+        },
       },
     });
   }
 
+  function renderNetworkSummary(items) {
+    const valuesRx = items.map((item) => item.rx).filter((v) => Number.isFinite(v));
+    const valuesTx = items.map((item) => item.tx).filter((v) => Number.isFinite(v));
+    const latest = items.length ? items[items.length - 1] : null;
+    const allRates = valuesRx.concat(valuesTx);
+    const highest = allRates.length ? Math.max.apply(null, allRates) : 0;
+    if (highest >= 1024 * 1024) rateUnit = { label: "MB/s", divisor: 1024 * 1024 };
+    else if (highest >= 1024) rateUnit = { label: "KB/s", divisor: 1024 };
+    else rateUnit = { label: "B/s", divisor: 1 };
+
+    const average = (values) => values.length
+      ? values.reduce((total, value) => total + value, 0) / values.length : null;
+    const peak = (values) => values.length ? Math.max.apply(null, values) : null;
+    $("netCurrentRx").textContent = latest ? formatRate(latest.rx) : "—";
+    $("netCurrentTx").textContent = latest ? formatRate(latest.tx) : "—";
+    $("netPeakRx").textContent = formatRate(peak(valuesRx));
+    $("netPeakTx").textContent = formatRate(peak(valuesTx));
+    $("netAvgRx").textContent = formatRate(average(valuesRx));
+    $("netAvgTx").textContent = formatRate(average(valuesTx));
+    $("networkUnitText").textContent = "Inbound / outbound · auto-scaled " + rateUnit.label;
+  }
+
   function refreshChart() {
     $("chartTitle").textContent = state.selected || "-";
-    const h = state.history[state.selected] || { t: [], cpu: [], mem: [] };
+    const history = state.history[state.selected] || [];
+    const now = Date.now();
+    const start = now - historyMinutes * 60 * 1000;
+    const visible = history.filter((item) => item.t >= start && item.t <= now);
     if (chart) {
-      chart.data.labels = h.t.slice();
-      chart.data.datasets[0].data = h.cpu.slice();
-      chart.data.datasets[1].data = h.mem.slice();
+      chart.data.datasets[0].data = buildSeries(history, "cpu", false);
+      chart.data.datasets[1].data = buildSeries(history, "mem", false);
+      chart.options.scales.x.min = start;
+      chart.options.scales.x.max = now;
       chart.update("none");
     }
+    renderNetworkSummary(visible);
     if (networkChart) {
-      networkChart.data.labels = h.t.slice();
-      networkChart.data.datasets[0].data = (h.rx || []).slice();
-      networkChart.data.datasets[1].data = (h.tx || []).slice();
+      networkChart.data.datasets[0].data = buildSeries(history, "rx", true);
+      networkChart.data.datasets[1].data = buildSeries(history, "tx", true);
+      networkChart.options.scales.x.min = start;
+      networkChart.options.scales.x.max = now;
+      networkChart.options.scales.y.ticks.callback = (v) =>
+        (v / rateUnit.divisor).toFixed(rateUnit.divisor === 1 ? 0 : 2) + " " + rateUnit.label;
       networkChart.update("none");
     }
   }
@@ -322,31 +453,70 @@
   /* ---------- polling: stats ---------- */
   function ingestStats(d) {
     state.stats = d.stats || {};
+    const containersByName = new Map(state.containers.map((container) => [container.name, container]));
     Object.keys(state.stats).forEach((name) => {
-      const s = state.stats[name];
-      if (!s.running) { delete state.lastNet[name]; delete state.rates[name]; return; }
-      const prev = state.lastNet[name];
-      let rate = null;
-      if (prev && s.net_rx_bytes >= prev.rx && s.net_tx_bytes >= prev.tx && d.ts - prev.ts > 0.2) {
-        const dt = d.ts - prev.ts;
-        rate = {
-          rx: (s.net_rx_bytes - prev.rx) / 1024 / dt,
-          tx: (s.net_tx_bytes - prev.tx) / 1024 / dt,
-        };
-        state.rates[name] = rate;
+      const sample = state.stats[name];
+      if (!sample.running) {
+        state.netBreakPending.add(name);
+        delete state.lastNet[name];
+        delete state.rates[name];
+        return;
       }
-      state.lastNet[name] = { rx: s.net_rx_bytes, tx: s.net_tx_bytes, ts: d.ts };
 
-      const h = state.history[name] ||
-        (state.history[name] = { t: [], cpu: [], mem: [], rx: [], tx: [] });
-      h.t.push(new Date(d.ts * 1000).toLocaleTimeString([], { hour12: false }));
-      h.cpu.push(s.cpu_percent);
-      h.mem.push(s.mem_percent);
-      h.rx.push(rate ? rate.rx : null);
-      h.tx.push(rate ? rate.tx : null);
-      if (h.t.length > HISTORY_POINTS) {
-        h.t.shift(); h.cpu.shift(); h.mem.shift(); h.rx.shift(); h.tx.shift();
+      const ts = d.ts * 1000;
+      const prev = state.lastNet[name];
+      const history = state.history[name] || (state.history[name] = []);
+      const previousSample = history.length ? history[history.length - 1] : null;
+      const elapsedMs = prev ? (d.ts - prev.ts) * 1000 : null;
+      const gapBefore = Boolean(previousSample && ts - previousSample.t > MAX_CONTIGUOUS_GAP_MS);
+      const container = containersByName.get(name);
+      const meta = container ? {
+        restartCount: container.restart_count,
+        startedAt: container.started_at,
+      } : null;
+      const oldMeta = state.restartMeta[name];
+      const restartObserved = Boolean(meta && oldMeta && (
+        meta.startedAt !== oldMeta.startedAt || meta.restartCount !== oldMeta.restartCount
+      ));
+      if (meta) state.restartMeta[name] = meta;
+      const countersReset = Boolean(restartObserved || (prev &&
+        (sample.net_rx_bytes < prev.rx || sample.net_tx_bytes < prev.tx)));
+      const wasInterrupted = !prev && state.netBreakPending.has(name);
+      const netBreakBefore = Boolean(gapBefore || countersReset || wasInterrupted);
+      const breakStart = previousSample ? previousSample.t : (prev ? prev.ts * 1000 : ts - 1);
+      const breakAt = gapBefore ? (breakStart + ts) / 2 : Math.max(breakStart + 1, ts - 1);
+
+      let rate = null;
+      if (prev && !gapBefore && !countersReset && elapsedMs > 200) {
+        const seconds = elapsedMs / 1000;
+        const rxBps = (sample.net_rx_bytes - prev.rx) / seconds;
+        const txBps = (sample.net_tx_bytes - prev.tx) / seconds;
+        rate = { rx: rxBps / 1024, tx: txBps / 1024, rxBps: rxBps, txBps: txBps };
+        state.rates[name] = rate;
+      } else {
+        delete state.rates[name];
       }
+
+      history.push({
+        t: ts,
+        cpu: sample.cpu_percent,
+        mem: sample.mem_percent,
+        rx: rate ? rate.rxBps : null,
+        tx: rate ? rate.txBps : null,
+        gapBefore: gapBefore,
+        netBreakBefore: netBreakBefore,
+        breakAt: breakAt,
+      });
+      state.lastNet[name] = {
+        rx: sample.net_rx_bytes, tx: sample.net_tx_bytes, ts: d.ts,
+      };
+      state.netBreakPending.delete(name);
+    });
+
+    const cutoff = d.ts * 1000 - HISTORY_MS;
+    Object.keys(state.history).forEach((name) => {
+      const history = state.history[name];
+      while (history.length && history[0].t < cutoff) history.shift();
     });
   }
 
@@ -362,6 +532,32 @@
     }
     setTimeout(statsLoop, STATS_GAP_MS);
   })();
+
+  /* ---------- monitoring status ---------- */
+  async function loadMonitoring() {
+    try {
+      state.monitoring = await getJSON(API + "/monitoring");
+    } catch (_) {
+      state.monitoring = {
+        ok: false,
+        prometheus: { state: "down", up: 0, total: 0 },
+        grafana: { state: "down" },
+      };
+    }
+    renderMonitoring();
+    renderKpis();
+  }
+
+  (function monitoringLoop() {
+    const next = () => setTimeout(monitoringLoop, MONITORING_MS);
+    if (document.hidden) { next(); return; }
+    loadMonitoring().then(next, next);
+  })();
+
+  $("historyWindow").addEventListener("change", (event) => {
+    historyMinutes = Number(event.target.value) || DEFAULT_HISTORY_MINUTES;
+    refreshChart();
+  });
 
   /* ---------- actions ---------- */
   function toast(msg, kind) {
@@ -478,5 +674,7 @@
     text.textContent = "Live \u00b7 refreshed " + age + " s ago";
   }, 1000);
 
-  $("grafanaLink").href = location.protocol + "//" + location.hostname + ":3000";
+  // Compose publishes both monitoring ports only on the local host.
+  $("grafanaLink").href = "http://localhost:3000";
+  $("prometheusLink").href = "http://localhost:9090/targets";
 })();

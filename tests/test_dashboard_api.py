@@ -141,3 +141,55 @@ def test_no_docker_access_gives_503():
         assert dash.app.test_client().get("/api/containers").status_code == 503
     finally:
         dash.docker.from_env = original
+
+
+def test_monitoring_endpoint_reports_healthy_services(monkeypatch):
+    def fake_fetch(url, timeout):
+        assert timeout <= 3
+        if url.endswith("/api/v1/targets"):
+            return {
+                "status": "success",
+                "data": {"activeTargets": [{"health": "up"}, {"health": "up"}]},
+            }
+        assert url.endswith("/api/health")
+        return {"database": "ok"}
+
+    monkeypatch.setattr(dash, "_fetch_json", fake_fetch)
+    response = dash.app.test_client().get("/api/monitoring")
+    assert response.status_code == 200
+    assert response.json == {
+        "ok": True,
+        "prometheus": {"state": "up", "up": 2, "total": 2},
+        "grafana": {"state": "up"},
+    }
+
+
+def test_monitoring_endpoint_reports_unhealthy_targets_and_grafana(monkeypatch):
+    def fake_fetch(url, timeout):
+        if url.endswith("/api/v1/targets"):
+            return {
+                "status": "success",
+                "data": {"activeTargets": [{"health": "up"}, {"health": "down"}]},
+            }
+        raise OSError("Grafana unavailable")
+
+    monkeypatch.setattr(dash, "_fetch_json", fake_fetch)
+    response = dash.app.test_client().get("/api/monitoring")
+    assert response.status_code == 200
+    assert response.json["ok"] is False
+    assert response.json["prometheus"] == {"state": "degraded", "up": 1, "total": 2}
+    assert response.json["grafana"]["state"] == "down"
+
+
+def test_monitoring_endpoint_survives_prometheus_timeout(monkeypatch):
+    def fake_fetch(url, timeout):
+        if url.endswith("/api/v1/targets"):
+            raise TimeoutError("timed out")
+        return {"database": "ok"}
+
+    monkeypatch.setattr(dash, "_fetch_json", fake_fetch)
+    response = dash.app.test_client().get("/api/monitoring")
+    assert response.status_code == 200
+    assert response.json["ok"] is False
+    assert response.json["prometheus"]["state"] == "down"
+    assert response.json["grafana"]["state"] == "up"

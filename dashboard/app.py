@@ -1,6 +1,9 @@
+import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from urllib.error import URLError
+from urllib.request import urlopen
 
 import docker
 from docker.errors import DockerException, NotFound
@@ -12,6 +15,9 @@ PROJECT = os.environ.get("COMPOSE_PROJECT", "netlab")
 PROTECTED = {"dashboard"}  # the dashboard must not stop or restart itself
 MAX_LOG_LINES = 500
 MB = 1024 * 1024
+PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090").rstrip("/")
+GRAFANA_URL = os.environ.get("GRAFANA_URL", "http://grafana:3000").rstrip("/")
+MONITORING_TIMEOUT_S = 2
 
 # Control requests must carry this header. Browsers do not let other
 # websites add it to a cross-site request, which blocks CSRF.
@@ -188,6 +194,7 @@ def api_index():
         "service": "dashboard-api",
         "endpoints": [
             "GET /api/health",
+            "GET /api/monitoring",
             "GET /api/containers",
             "GET /api/stats",
             "GET /api/containers/<name>/stats",
@@ -201,6 +208,48 @@ def api_index():
 @app.get("/api/health")
 def health():
     return jsonify({"status": "ok"})
+
+
+def _fetch_json(url, timeout=MONITORING_TIMEOUT_S):
+    """Fetch a JSON health endpoint with a short timeout."""
+    with urlopen(url, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+@app.get("/api/monitoring")
+def monitoring():
+    """Return monitoring status without making dashboard health depend on it."""
+    prometheus = {"state": "down", "up": 0, "total": 0}
+    grafana = {"state": "down"}
+
+    try:
+        payload = _fetch_json(
+            f"{PROMETHEUS_URL}/api/v1/targets", timeout=MONITORING_TIMEOUT_S
+        )
+        targets = payload.get("data", {}).get("activeTargets")
+        if payload.get("status") != "success" or not isinstance(targets, list):
+            raise ValueError("invalid Prometheus targets response")
+        up = sum(1 for target in targets if target.get("health") == "up")
+        total = len(targets)
+        prometheus = {
+            "state": "up" if total > 0 and up == total else "degraded",
+            "up": up,
+            "total": total,
+        }
+    except (URLError, OSError, TimeoutError, ValueError, TypeError, AttributeError) as exc:
+        app.logger.warning("Prometheus health check failed: %s", exc)
+
+    try:
+        payload = _fetch_json(f"{GRAFANA_URL}/api/health", timeout=MONITORING_TIMEOUT_S)
+        grafana = {"state": "up" if payload.get("database") == "ok" else "degraded"}
+    except (URLError, OSError, TimeoutError, ValueError, TypeError, AttributeError) as exc:
+        app.logger.warning("Grafana health check failed: %s", exc)
+
+    return jsonify({
+        "ok": prometheus["state"] == "up" and grafana["state"] == "up",
+        "prometheus": prometheus,
+        "grafana": grafana,
+    })
 
 
 @app.get("/api/containers")
