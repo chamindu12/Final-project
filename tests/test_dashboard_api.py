@@ -1,8 +1,10 @@
 """Unit tests for the dashboard API. A fake Docker client is used, so no
 Docker engine is needed (this also runs in GitHub Actions)."""
+import json
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+from urllib.error import URLError
 
 import pytest
 from docker.errors import NotFound
@@ -143,53 +145,61 @@ def test_no_docker_access_gives_503():
         dash.docker.from_env = original
 
 
-def test_monitoring_endpoint_reports_healthy_services(monkeypatch):
-    def fake_fetch(url, timeout):
-        assert timeout <= 3
-        if url.endswith("/api/v1/targets"):
-            return {
-                "status": "success",
-                "data": {"activeTargets": [{"health": "up"}, {"health": "up"}]},
-            }
-        assert url.endswith("/api/health")
-        return {"database": "ok"}
-
-    monkeypatch.setattr(dash, "_fetch_json", fake_fetch)
-    response = dash.app.test_client().get("/api/monitoring")
-    assert response.status_code == 200
-    assert response.json == {
-        "ok": True,
-        "prometheus": {"state": "up", "up": 2, "total": 2},
-        "grafana": {"state": "up"},
-    }
+# ---------- /api/monitoring (Prometheus status card) ----------
+def _reply(payload):
+    r = MagicMock()
+    r.__enter__.return_value = r
+    r.read.return_value = json.dumps(payload).encode()
+    return r
 
 
-def test_monitoring_endpoint_reports_unhealthy_targets_and_grafana(monkeypatch):
-    def fake_fetch(url, timeout):
-        if url.endswith("/api/v1/targets"):
-            return {
-                "status": "success",
-                "data": {"activeTargets": [{"health": "up"}, {"health": "down"}]},
-            }
-        raise OSError("Grafana unavailable")
-
-    monkeypatch.setattr(dash, "_fetch_json", fake_fetch)
-    response = dash.app.test_client().get("/api/monitoring")
-    assert response.status_code == 200
-    assert response.json["ok"] is False
-    assert response.json["prometheus"] == {"state": "degraded", "up": 1, "total": 2}
-    assert response.json["grafana"]["state"] == "down"
+def _fake_urlopen(targets=None, grafana=None, error=None):
+    def opener(url, timeout=None):
+        if error:
+            raise error
+        if "/api/v1/targets" in url:
+            return _reply({"status": "success", "data": {"activeTargets": targets}})
+        return _reply(grafana)
+    return opener
 
 
-def test_monitoring_endpoint_survives_prometheus_timeout(monkeypatch):
-    def fake_fetch(url, timeout):
-        if url.endswith("/api/v1/targets"):
-            raise TimeoutError("timed out")
-        return {"database": "ok"}
+def _monitoring(opener):
+    with patch.object(dash, "urlopen", opener):
+        return dash.app.test_client().get("/api/monitoring").json
 
-    monkeypatch.setattr(dash, "_fetch_json", fake_fetch)
-    response = dash.app.test_client().get("/api/monitoring")
-    assert response.status_code == 200
-    assert response.json["ok"] is False
-    assert response.json["prometheus"]["state"] == "down"
-    assert response.json["grafana"]["state"] == "up"
+
+def test_monitoring_all_up():
+    d = _monitoring(_fake_urlopen([{"health": "up"}, {"health": "up"}], {"database": "ok"}))
+    assert d == {"ok": True, "prometheus": {"state": "up", "up": 2, "total": 2},
+                 "grafana": {"state": "up"}}
+
+
+def test_monitoring_degraded():
+    d = _monitoring(_fake_urlopen([{"health": "up"}, {"health": "down"}], {"database": "bad"}))
+    assert d["ok"] is False
+    assert d["prometheus"] == {"state": "degraded", "up": 1, "total": 2}
+    assert d["grafana"] == {"state": "degraded"}
+
+
+def test_monitoring_zero_targets_is_degraded():
+    d = _monitoring(_fake_urlopen([], {"database": "ok"}))
+    assert d["prometheus"]["state"] == "degraded" and d["ok"] is False
+
+
+def test_monitoring_unreachable_does_not_break_dashboard():
+    d = _monitoring(_fake_urlopen(error=URLError("refused")))
+    assert d["prometheus"]["state"] == "down" and d["grafana"]["state"] == "down"
+    assert dash.app.test_client().get("/api/health").json == {"status": "ok"}
+
+
+def test_monitoring_bad_reply_is_down():
+    bad = MagicMock()
+    bad.__enter__.return_value = bad
+    bad.read.return_value = b"<html>not json</html>"
+    d = _monitoring(lambda url, timeout=None: bad)
+    assert d["prometheus"]["state"] == "down" and d["grafana"]["state"] == "down"
+
+
+def test_monitoring_rejects_non_http_urls():
+    with pytest.raises(ValueError):
+        dash._fetch_json("file:///etc/passwd")

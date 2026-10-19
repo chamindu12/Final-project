@@ -9,7 +9,7 @@
   const LOG_MS = 2000;
   const MONITORING_MS = 10000;
   const HISTORY_MS = 15 * 60 * 1000;
-  const MAX_CONTIGUOUS_GAP_MS = 5000;
+  const MAX_CONTIGUOUS_GAP_MS = 10000;
   const DEFAULT_HISTORY_MINUTES = 5;
   const PAST = { start: "started", stop: "stopped", restart: "restarted" };
 
@@ -110,7 +110,8 @@
       }
 
       const r = state.rates[c.name];
-      const net = run && r ? "&darr; " + r.rx.toFixed(1) + "<br>&uarr; " + r.tx.toFixed(1) : "-";
+      const net = run && r
+        ? "&darr; " + formatRate(r.rxBps) + "<br>&uarr; " + formatRate(r.txBps) : "-";
       const ip = Object.keys(c.networks).map((n) => c.networks[n]).join(", ") || "-";
       const ports = c.ports.map((p) =>
         '<span class="port ' + (p.published ? "pub" : "int") + '">' + esc(p.label) + "</span>"
@@ -198,7 +199,7 @@
       } else if (p.state === "degraded") {
         alerts.push({
           severity: "warn", title: "Prometheus targets:",
-          message: (p.up || 0) + " of " + (p.total || 0) + " targets are up.",
+          message: (Number(p.up) || 0) + " of " + (Number(p.total) || 0) + " targets are up.",
         });
       }
       if (g.state === "down") {
@@ -329,7 +330,8 @@
           legend: { position: "bottom" },
           tooltip: { callbacks: {
             title: (items) => items.length ? fmtChartTime(items[0].parsed.x) : "",
-            label: (item) => item.dataset.label + ": " + item.parsed.y.toFixed(2) + "%",
+            label: (item) => item.dataset.label + ": " +
+              (item.parsed.y == null ? "no data" : item.parsed.y.toFixed(2) + "%"),
           } },
         },
       },
@@ -463,7 +465,10 @@
         return;
       }
 
-      const ts = d.ts * 1000;
+      // Chart x positions use the browser clock (arrival time). The server clock can
+      // drift from the browser clock on WSL2, which would push every sample outside
+      // the visible time window. d.ts (server time) is used only for the rate maths.
+      const ts = Date.now();
       const prev = state.lastNet[name];
       const history = state.history[name] || (state.history[name] = []);
       const previousSample = history.length ? history[history.length - 1] : null;
@@ -483,7 +488,7 @@
         (sample.net_rx_bytes < prev.rx || sample.net_tx_bytes < prev.tx)));
       const wasInterrupted = !prev && state.netBreakPending.has(name);
       const netBreakBefore = Boolean(gapBefore || countersReset || wasInterrupted);
-      const breakStart = previousSample ? previousSample.t : (prev ? prev.ts * 1000 : ts - 1);
+      const breakStart = previousSample ? previousSample.t : (prev ? prev.at : ts - 1);
       const breakAt = gapBefore ? (breakStart + ts) / 2 : Math.max(breakStart + 1, ts - 1);
 
       let rate = null;
@@ -508,12 +513,12 @@
         breakAt: breakAt,
       });
       state.lastNet[name] = {
-        rx: sample.net_rx_bytes, tx: sample.net_tx_bytes, ts: d.ts,
+        rx: sample.net_rx_bytes, tx: sample.net_tx_bytes, ts: d.ts, at: ts,
       };
       state.netBreakPending.delete(name);
     });
 
-    const cutoff = d.ts * 1000 - HISTORY_MS;
+    const cutoff = Date.now() - HISTORY_MS;
     Object.keys(state.history).forEach((name) => {
       const history = state.history[name];
       while (history.length && history[0].t < cutoff) history.shift();

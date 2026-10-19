@@ -121,6 +121,9 @@ jobs:
             exit 1
           fi
 
+      - name: Check dashboard monitoring status
+        run: curl -fsS http://localhost:8080/dashboard/api/monitoring | grep -q '"ok":true'
+
       - name: Show logs on failure
         if: failure()
         run: docker compose logs --tail=50
