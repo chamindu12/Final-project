@@ -37,7 +37,7 @@
   <main id="top">
     <header class="topbar">
       <div>
-        <h3>Overview</h3>
+        <h2>Overview</h2>
         <p>Real-time status of the containerised network services</p>
       </div>
       <div class="pill" id="livePill"><span class="dot"></span><span id="liveText">Connecting...</span></div>
@@ -70,7 +70,7 @@
 
     <section class="panel monitoring-panel" id="monitoring">
       <div class="panel-h">
-        <h3>Monitoring</h3>
+        <h2>Monitoring</h2>
         <span class="muted">Prometheus targets and Grafana health</span>
       </div>
       <div class="monitoring-body">
@@ -91,7 +91,7 @@
 
     <section class="panel" id="containers">
       <div class="panel-h">
-        <h3>Containers <span class="count" id="countBadge">0 total</span></h3>
+        <h2>Containers <span class="count" id="countBadge">0 total</span></h2>
         <span class="muted">Docker SDK &middot; auto-refresh 3 s &middot; click a row to inspect it</span>
       </div>
       <div class="table-responsive">
@@ -99,7 +99,7 @@
           <thead>
             <tr>
               <th>Container</th><th>Status</th><th>Health</th><th>IP address</th>
-              <th>Ports</th><th>CPU</th><th>Memory</th><th>Net KB/s</th><th class="text-end">Actions</th>
+              <th>Ports</th><th>CPU</th><th>Memory</th><th>Network</th><th class="text-end">Actions</th>
             </tr>
           </thead>
           <tbody id="tbody"><tr><td colspan="9" class="muted p-4">Loading containers...</td></tr></tbody>
@@ -110,7 +110,7 @@
     <section class="two" id="resources">
       <div class="panel">
         <div class="panel-h">
-          <h3>Resource usage <span class="count mono" id="chartTitle">-</span></h3>
+          <h2>Resource usage <span class="count mono" id="chartTitle">-</span></h2>
           <label class="window-control" for="historyWindow">
             <span class="muted">History</span>
             <select id="historyWindow" class="form-select form-select-sm" aria-label="Chart history window">
@@ -123,7 +123,7 @@
         <div class="chart-wrap"><canvas id="chartCanvas"></canvas></div>
         <div class="network-chart">
           <div class="network-chart-h">
-            <h2>Network I/O</h2>
+            <h3>Network I/O</h3>
             <span class="muted" id="networkUnitText">Inbound / outbound · auto-scaled B/s</span>
           </div>
           <div class="network-stats" aria-label="Network rate summary">
@@ -147,7 +147,7 @@
 
     <section class="panel" id="logs">
       <div class="panel-h log-h">
-        <h3>Logs</h3>
+        <h2>Logs</h2>
         <div class="log-tools">
           <select id="logContainer" class="form-select form-select-sm" aria-label="Container"></select>
           <select id="logTail" class="form-select form-select-sm" aria-label="Lines">

@@ -211,40 +211,48 @@ def health():
 
 
 def _fetch_json(url, timeout=MONITORING_TIMEOUT_S):
-    """Fetch a JSON health endpoint with a short timeout."""
+    """Fetch a JSON health endpoint with a short timeout (http and https only)."""
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("only http and https URLs are allowed")
     with urlopen(url, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-@app.get("/api/monitoring")
-def monitoring():
-    """Return monitoring status without making dashboard health depend on it."""
-    prometheus = {"state": "down", "up": 0, "total": 0}
-    grafana = {"state": "down"}
+MONITORING_ERRORS = (URLError, OSError, TimeoutError, ValueError, TypeError, AttributeError)
 
+
+def _prometheus_status():
     try:
-        payload = _fetch_json(
-            f"{PROMETHEUS_URL}/api/v1/targets", timeout=MONITORING_TIMEOUT_S
-        )
+        payload = _fetch_json(f"{PROMETHEUS_URL}/api/v1/targets")
         targets = payload.get("data", {}).get("activeTargets")
         if payload.get("status") != "success" or not isinstance(targets, list):
             raise ValueError("invalid Prometheus targets response")
         up = sum(1 for target in targets if target.get("health") == "up")
         total = len(targets)
-        prometheus = {
-            "state": "up" if total > 0 and up == total else "degraded",
-            "up": up,
-            "total": total,
-        }
-    except (URLError, OSError, TimeoutError, ValueError, TypeError, AttributeError) as exc:
+        return {"state": "up" if total > 0 and up == total else "degraded",
+                "up": up, "total": total}
+    except MONITORING_ERRORS as exc:
         app.logger.warning("Prometheus health check failed: %s", exc)
+        return {"state": "down", "up": 0, "total": 0}
 
+
+def _grafana_status():
     try:
-        payload = _fetch_json(f"{GRAFANA_URL}/api/health", timeout=MONITORING_TIMEOUT_S)
-        grafana = {"state": "up" if payload.get("database") == "ok" else "degraded"}
-    except (URLError, OSError, TimeoutError, ValueError, TypeError, AttributeError) as exc:
+        payload = _fetch_json(f"{GRAFANA_URL}/api/health")
+        return {"state": "up" if payload.get("database") == "ok" else "degraded"}
+    except MONITORING_ERRORS as exc:
         app.logger.warning("Grafana health check failed: %s", exc)
+        return {"state": "down"}
 
+
+@app.get("/api/monitoring")
+def monitoring():
+    """Return monitoring status without making dashboard health depend on it.
+    Both checks run in parallel, so the worst case is one timeout, not two."""
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        prometheus_job = pool.submit(_prometheus_status)
+        grafana_job = pool.submit(_grafana_status)
+        prometheus, grafana = prometheus_job.result(), grafana_job.result()
     return jsonify({
         "ok": prometheus["state"] == "up" and grafana["state"] == "up",
         "prometheus": prometheus,
