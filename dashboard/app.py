@@ -316,4 +316,3 @@ def container_action(name, action):
     actions[action](c)
     c.reload()
     return jsonify(summary(c))
-    
