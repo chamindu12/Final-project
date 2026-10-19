@@ -1,4 +1,4 @@
-# Containerized Network Services - core services, dashboard API, hardening
+# Containerized Network Services - core services, dashboard, monitoring, hardening
 # Start:  docker compose up -d --build
 # Stop:   docker compose down
 
@@ -17,6 +17,10 @@ networks:
     ipam:
       config:
         - subnet: 172.21.0.0/24
+
+volumes:
+  prometheus_data:
+  grafana_data:
 
 services:
   nginx-web:
@@ -99,6 +103,114 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # ---------- Monitoring: cAdvisor -> Prometheus -> Grafana ----------
+  # cAdvisor needs read-only access to host paths to read container metrics, so it
+  # cannot follow the same hardening as the other services (accepted risk: it is
+  # never published to the host and its mounts are read-only).
+  cadvisor:
+    image: ghcr.io/google/cadvisor:0.55.1
+    container_name: cadvisor
+    restart: unless-stopped
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=15s
+      - --store_container_labels=false
+      - --whitelisted_container_labels=com.docker.compose.service
+    networks:
+      lab_net:
+        ipv4_address: 172.20.0.31
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  prometheus:
+    image: prom/prometheus:v3.13.2
+    container_name: prometheus
+    restart: unless-stopped
+    depends_on:
+      cadvisor:
+        condition: service_healthy
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=2d
+    networks:
+      lab_net:
+        ipv4_address: 172.20.0.30
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/healthy >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  grafana:
+    image: grafana/grafana:12.4.4
+    container_name: grafana
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/container-network-services.json
+    networks:
+      lab_net:
+        ipv4_address: 172.20.0.32
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 150
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   nginx-proxy:
     image: nginxinc/nginx-unprivileged:1.27-alpine

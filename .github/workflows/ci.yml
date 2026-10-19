@@ -30,6 +30,12 @@ jobs:
           flake8 dashboard/app.py tests --max-line-length=100
           pytest tests -q
 
+      - name: Validate monitoring configuration
+        run: |
+          python3 -m json.tool monitoring/grafana/dashboards/container-network-services.json > /dev/null
+          docker run --rm --entrypoint promtool -v "$PWD/monitoring/prometheus:/cfg:ro" \
+            prom/prometheus:v3.13.2 check config /cfg/prometheus.yml
+
       - name: Validate compose file
         run: |
           cp .env.example .env
@@ -48,7 +54,7 @@ jobs:
         run: docker compose build
 
       - name: Start stack and wait until healthy
-        run: docker compose up -d --wait --wait-timeout 90
+        run: docker compose up -d --wait --wait-timeout 180
 
       - name: Show container status
         run: docker compose ps
@@ -76,6 +82,30 @@ jobs:
           check vendor/bootstrap.min.css 150000
           check js/app.js 5000
           check css/app.css 2000
+
+      - name: Check Prometheus collects metrics
+        run: |
+          prom() {
+            curl -fsS -G --data-urlencode "query=$1" http://localhost:9090/api/v1/query |
+              python3 -c "import sys,json; print(json.load(sys.stdin)['data']['result'][0]['value'][1])" || echo 0
+          }
+          for i in $(seq 1 18); do
+            up=$(prom 'sum(up)')
+            seen=$(prom 'count(container_memory_working_set_bytes{name="nginx-web"})')
+            echo "targets up: $up, nginx-web series: $seen"
+            if [ "$up" = "2" ] && [ "$seen" != "0" ]; then exit 0; fi
+            sleep 5
+          done
+          echo "Prometheus did not get the expected metrics"
+          curl -s http://localhost:9090/api/v1/targets
+          exit 1
+
+      - name: Check Grafana provisioning
+        run: |
+          pw=$(grep '^GRAFANA_ADMIN_PASSWORD=' .env | cut -d= -f2-)
+          curl -fsS -u "admin:$pw" http://localhost:3000/api/datasources/uid/prometheus | grep -q '"type":"prometheus"'
+          curl -fsS -u "admin:$pw" -G --data-urlencode "query=Container Network Services" \
+            http://localhost:3000/api/search | grep -q "Container Network Services"
 
       - name: Test custom DNS
         run: |

@@ -477,4 +477,6 @@
     pill.className = "pill";
     text.textContent = "Live \u00b7 refreshed " + age + " s ago";
   }, 1000);
+
+  $("grafanaLink").href = location.protocol + "//" + location.hostname + ":3000";
 })();
