@@ -22,9 +22,9 @@
     <div class="nav-label">Manage</div>
     <nav class="nav-list">
       <a href="#top" class="active">Overview</a>
+      <a href="#monitoring">Monitoring</a>
       <a href="#containers">Containers</a>
       <a href="#resources">Resources</a>
-      <a href="#" id="grafanaLink" target="_blank" rel="noopener">Monitoring</a>
       <a href="#logs">Logs</a>
     </nav>
     <div class="side-foot">
@@ -37,7 +37,7 @@
   <main id="top">
     <header class="topbar">
       <div>
-        <h1>Overview</h1>
+        <h3>Overview</h3>
         <p>Real-time status of the containerised network services</p>
       </div>
       <div class="pill" id="livePill"><span class="dot"></span><span id="liveText">Connecting...</span></div>
@@ -68,9 +68,30 @@
       </div>
     </section>
 
+    <section class="panel monitoring-panel" id="monitoring">
+      <div class="panel-h">
+        <h3>Monitoring</h3>
+        <span class="muted">Prometheus targets and Grafana health</span>
+      </div>
+      <div class="monitoring-body">
+        <div class="monitoring-service" id="prometheusService">
+          <div class="monitoring-service-title">Prometheus</div>
+          <div class="monitoring-value" id="prometheusText">Checking targets...</div>
+          <span class="badge-s off" id="prometheusBadge">Checking</span>
+          <a class="monitoring-link" id="prometheusLink" href="http://localhost:9090/targets" target="_blank" rel="noopener">Prometheus targets</a>
+        </div>
+        <div class="monitoring-service" id="grafanaService">
+          <div class="monitoring-service-title">Grafana</div>
+          <div class="monitoring-value" id="grafanaText">Checking health...</div>
+          <span class="badge-s off" id="grafanaBadge">Checking</span>
+          <a class="monitoring-link" id="grafanaLink" href="http://localhost:3000" target="_blank" rel="noopener">Open Grafana</a>
+        </div>
+      </div>
+    </section>
+
     <section class="panel" id="containers">
       <div class="panel-h">
-        <h2>Containers <span class="count" id="countBadge">0 total</span></h2>
+        <h3>Containers <span class="count" id="countBadge">0 total</span></h3>
         <span class="muted">Docker SDK &middot; auto-refresh 3 s &middot; click a row to inspect it</span>
       </div>
       <div class="table-responsive">
@@ -89,14 +110,29 @@
     <section class="two" id="resources">
       <div class="panel">
         <div class="panel-h">
-          <h2>Resource usage <span class="count mono" id="chartTitle">-</span></h2>
-          <span class="muted">since this page was opened</span>
+          <h3>Resource usage <span class="count mono" id="chartTitle">-</span></h3>
+          <label class="window-control" for="historyWindow">
+            <span class="muted">History</span>
+            <select id="historyWindow" class="form-select form-select-sm" aria-label="Chart history window">
+              <option value="1">Last 1 minute</option>
+              <option value="5" selected>Last 5 minutes</option>
+              <option value="15">Last 15 minutes</option>
+            </select>
+          </label>
         </div>
         <div class="chart-wrap"><canvas id="chartCanvas"></canvas></div>
         <div class="network-chart">
           <div class="network-chart-h">
-            <h3>Network traffic</h3>
-            <span class="muted">Inbound / outbound · KB/s</span>
+            <h2>Network I/O</h2>
+            <span class="muted" id="networkUnitText">Inbound / outbound · auto-scaled B/s</span>
+          </div>
+          <div class="network-stats" aria-label="Network rate summary">
+            <div class="network-stat"><span>Current inbound</span><strong id="netCurrentRx">—</strong></div>
+            <div class="network-stat"><span>Current outbound</span><strong id="netCurrentTx">—</strong></div>
+            <div class="network-stat"><span>Peak inbound</span><strong id="netPeakRx">—</strong></div>
+            <div class="network-stat"><span>Peak outbound</span><strong id="netPeakTx">—</strong></div>
+            <div class="network-stat"><span>Average inbound</span><strong id="netAvgRx">—</strong></div>
+            <div class="network-stat"><span>Average outbound</span><strong id="netAvgTx">—</strong></div>
           </div>
           <div class="chart-wrap network-chart-wrap"><canvas id="networkChartCanvas"></canvas></div>
         </div>
@@ -111,7 +147,7 @@
 
     <section class="panel" id="logs">
       <div class="panel-h log-h">
-        <h2>Logs</h2>
+        <h3>Logs</h3>
         <div class="log-tools">
           <select id="logContainer" class="form-select form-select-sm" aria-label="Container"></select>
           <select id="logTail" class="form-select form-select-sm" aria-label="Lines">
