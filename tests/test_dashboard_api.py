@@ -203,3 +203,4 @@ def test_monitoring_bad_reply_is_down():
 def test_monitoring_rejects_non_http_urls():
     with pytest.raises(ValueError):
         dash._fetch_json("file:///etc/passwd")
+        
