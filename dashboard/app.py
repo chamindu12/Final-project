@@ -13,7 +13,7 @@ from urllib.request import urlopen
 
 import docker
 from docker.errors import DockerException, NotFound
-from flask import Flask, abort, jsonify, redirect, render_template, request, session
+from flask import Flask, jsonify, redirect, render_template, request, session
 
 app = Flask(__name__)
 
@@ -500,4 +500,3 @@ def container_action(name, action):
     actions[action](c)
     c.reload()
     return jsonify(summary(c))
-    
