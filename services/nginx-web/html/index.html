@@ -1,6 +1,77 @@
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Lab Web Server</title></head>
-<body style="font-family:sans-serif;text-align:center;margin-top:15%">
-  <h1>Hello from nginx-web</h1>
-  <p>Served by a hardened, non-root Docker container.</p>
-</body></html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetLab Network Services</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f3f5f9; color: #0f172a; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  header { background: #0b1220; color: #fff; padding: 36px 24px; text-align: center; }
+  header h1 { margin: 0 0 6px; font-size: 26px; }
+  header p { margin: 0; color: #94a3b8; }
+  main { max-width: 980px; margin: 28px auto; padding: 0 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+  .card { background: #fff; border: 1px solid #e5e9f0; border-top: 5px solid var(--c); border-radius: 12px; padding: 22px; display: flex; flex-direction: column; }
+  .card h2 { margin: 0 0 6px; font-size: 18px; }
+  .card p { margin: 0 0 10px; color: #475569; }
+  .card ul { margin: 0 0 16px; padding-left: 18px; color: #334155; flex: 1; }
+  .card a { background: var(--c); color: #fff; text-decoration: none; text-align: center; padding: 10px 14px; border-radius: 8px; font-weight: 600; }
+  .admin { --c: #2563eb; } .staff { --c: #0f766e; } .guest { --c: #b45309; }
+  .note { margin-top: 22px; background: #fff; border: 1px solid #e5e9f0; border-radius: 12px; padding: 16px 20px; color: #475569; font-size: 14px; }
+  footer { text-align: center; color: #94a3b8; font-size: 13px; padding: 18px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NetLab Network Services</h1>
+  <p>Choose how you are signing in. Each role has its own sign-in and its own tools.</p>
+</header>
+<main>
+  <div class="grid">
+    <section class="card admin">
+      <h2>Admin</h2>
+      <p>Run and watch the platform.</p>
+      <ul>
+        <li>Container status and health</li>
+        <li>Live CPU, memory and network</li>
+        <li>Logs, including who used which portal</li>
+        <li>Start, stop and restart services</li>
+      </ul>
+      <a href="/dashboard/">Admin sign in</a>
+    </section>
+    <section class="card staff">
+      <h2>Staff</h2>
+      <p>Internal work area for staff.</p>
+      <ul>
+        <li>Notice board</li>
+        <li>Shared files: upload and download</li>
+        <li>Network speed test up to 50 MB</li>
+      </ul>
+      <a href="http://localhost:8081/" data-port="8081">Staff sign in</a>
+    </section>
+    <section class="card guest">
+      <h2>Guest</h2>
+      <p>Limited access for visitors.</p>
+      <ul>
+        <li>Announcements</li>
+        <li>Visitor guide</li>
+        <li>Small speed test up to 1 MB</li>
+      </ul>
+      <a href="http://localhost:8082/" data-port="8082">Guest sign in</a>
+    </section>
+  </div>
+  <div class="note">
+    Staff, guest and admin accounts are separate: a staff account does not work on the guest portal or the dashboard.
+    Which sign-in pages you can open also depends on the network you are connected to.
+  </div>
+</main>
+<footer>NetLab &middot; containerised network services</footer>
+<script>
+  // Point the staff and guest buttons at this same machine, whatever name it was opened with.
+  document.querySelectorAll("[data-port]").forEach(function (a) {
+    a.href = location.protocol + "//" + location.hostname + ":" + a.dataset.port + "/";
+  });
+</script>
+</body>
+</html>

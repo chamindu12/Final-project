@@ -11,16 +11,23 @@ networks:
     ipam:
       config:
         - subnet: 172.20.0.0/24
-  isolated_net:
+  isolated_net:                 # guest zone
     name: isolated_net
     driver: bridge
     ipam:
       config:
         - subnet: 172.21.0.0/24
+  staff_net:                    # staff zone
+    name: staff_net
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24
 
 volumes:
   prometheus_data:
   grafana_data:
+  staff_data:
 
 services:
   nginx-web:
@@ -56,6 +63,8 @@ services:
     networks:
       lab_net:
         ipv4_address: 172.20.0.53
+      staff_net:
+        ipv4_address: 172.22.0.53
     ports:
       - "127.0.0.1:5353:5353/udp"
     read_only: true
@@ -88,6 +97,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       COMPOSE_PROJECT: netlab
+      ADMIN_USERS: ${ADMIN_USERS:?Set ADMIN_USERS in .env (name:password)}
+      PORTAL_SECRET_KEY: ${PORTAL_SECRET_KEY:?Set PORTAL_SECRET_KEY in .env}
     read_only: true
     tmpfs:
       - /tmp
@@ -96,6 +107,66 @@ services:
       - no-new-privileges:true
     mem_limit: 256m
     cpus: 0.5
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---------- Scenario: staff and guest portals (one image, two roles) ----------
+  staff-portal:
+    build: ./portal
+    image: netlab/portal:1.0
+    container_name: staff-portal
+    restart: unless-stopped
+    environment:
+      PORTAL_ROLE: staff
+      PORTAL_USERS: ${STAFF_USERS:?Set STAFF_USERS in .env (name:password,name:password)}
+      PORTAL_SECRET_KEY: ${PORTAL_SECRET_KEY:?Set PORTAL_SECRET_KEY in .env}
+      DATA_DIR: /data
+    networks:
+      lab_net:
+        ipv4_address: 172.20.0.41
+    volumes:
+      - staff_data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  guest-portal:
+    build: ./portal
+    image: netlab/portal:1.0
+    container_name: guest-portal
+    restart: unless-stopped
+    environment:
+      PORTAL_ROLE: guest
+      PORTAL_USERS: ${GUEST_USERS:?Set GUEST_USERS in .env (name:password,name:password)}
+      PORTAL_SECRET_KEY: ${PORTAL_SECRET_KEY:?Set PORTAL_SECRET_KEY in .env}
+    networks:
+      lab_net:
+        ipv4_address: 172.20.0.42
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    cpus: 0.25
     pids_limit: 100
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health', timeout=3)"]
@@ -221,11 +292,22 @@ services:
         condition: service_healthy
       dashboard:
         condition: service_healthy
+      staff-portal:
+        condition: service_healthy
+      guest-portal:
+        condition: service_healthy
+    # Multi-homed gateway: one interface in each network zone
     networks:
       lab_net:
         ipv4_address: 172.20.0.11
+      staff_net:
+        ipv4_address: 172.22.0.11
+      isolated_net:
+        ipv4_address: 172.21.0.11
     ports:
-      - "${PROXY_PORT:-8080}:8080"
+      - "127.0.0.1:${PROXY_PORT:-8080}:8080"   # admin plane
+      - "127.0.0.1:${STAFF_PORT:-8081}:8081"   # staff portal
+      - "127.0.0.1:${GUEST_PORT:-8082}:8082"   # guest portal
     volumes:
       - ./services/reverse-proxy/default.conf:/etc/nginx/conf.d/default.conf:ro
     read_only: true
@@ -244,18 +326,45 @@ services:
       retries: 3
       start_period: 5s
 
-  isolated-test:
-    image: alpine:3.20
-    container_name: isolated-test
-    command: ["sleep", "infinity"]
+  # ---------- Terminal clients: one "PC" per zone ----------
+  staff-client:
+    build: ./services/client
+    image: netlab/client:1.0
+    container_name: staff-client
+    hostname: staff-pc
     restart: unless-stopped
-    user: "65534:65534"
+    networks:
+      staff_net:
+        ipv4_address: 172.22.0.10
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"   # lets a non-root user run ping
+    mem_limit: 32m
+    cpus: 0.1
+    pids_limit: 50
+
+  isolated-test:                 # the guest PC
+    build: ./services/client
+    image: netlab/client:1.0
+    container_name: isolated-test
+    hostname: guest-pc
+    restart: unless-stopped
     networks:
       isolated_net:
         ipv4_address: 172.21.0.10
     read_only: true
+    tmpfs:
+      - /tmp
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
     mem_limit: 32m
     cpus: 0.1
+    pids_limit: 50

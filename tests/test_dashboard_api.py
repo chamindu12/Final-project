@@ -1,18 +1,40 @@
 """Unit tests for the dashboard API. A fake Docker client is used, so no
 Docker engine is needed (this also runs in GitHub Actions)."""
+import importlib.util
 import json
 import os
+import re
 import sys
+import uuid
 from unittest.mock import MagicMock, patch
 from urllib.error import URLError
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from docker.errors import NotFound
 
+DASHBOARD_APP = os.path.join(os.path.dirname(__file__), "..", "dashboard", "app.py")
+os.environ.setdefault("PORTAL_SECRET_KEY", "test-secret-key-0123456789")
+os.environ.setdefault("ADMIN_USERS", "admin:AdminPass1")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "dashboard"))
 import app as dash  # noqa: E402
 
 HEADERS = {"X-Requested-With": "dashboard-ui"}
+
+
+def token_of(client):
+    html = client.get("/login").get_data(as_text=True)
+    return re.search(r'name="csrf_token" value="([^"]+)"', html).group(1)
+
+
+def new_client():
+    """A test client that is signed in as the admin."""
+    c = dash.app.test_client()
+    r = c.post("/login", data={"csrf_token": token_of(c), "username": "admin",
+                               "password": "AdminPass1"})
+    assert r.status_code == 302
+    return c
+
 
 STATS = {
     "cpu_stats": {"cpu_usage": {"total_usage": 2_000_000},
@@ -64,7 +86,7 @@ def client():
 
     docker_client.containers.get.side_effect = get
     dash._client = docker_client
-    yield dash.app.test_client(), web
+    yield new_client(), web
     dash._client = None
 
 
@@ -140,7 +162,7 @@ def test_no_docker_access_gives_503():
 
     dash.docker.from_env = broken
     try:
-        assert dash.app.test_client().get("/api/containers").status_code == 503
+        assert new_client().get("/api/containers").status_code == 503
     finally:
         dash.docker.from_env = original
 
@@ -165,7 +187,7 @@ def _fake_urlopen(targets=None, grafana=None, error=None):
 
 def _monitoring(opener):
     with patch.object(dash, "urlopen", opener):
-        return dash.app.test_client().get("/api/monitoring").json
+        return new_client().get("/api/monitoring").json
 
 
 def test_monitoring_all_up():
@@ -203,3 +225,168 @@ def test_monitoring_bad_reply_is_down():
 def test_monitoring_rejects_non_http_urls():
     with pytest.raises(ValueError):
         dash._fetch_json("file:///etc/passwd")
+
+
+# ---------- Prometheus-backed chart history ----------
+def test_metrics_history_returns_prometheus_samples(client):
+    requests = []
+
+    def opener(url, timeout=None):
+        params = parse_qs(urlparse(url).query)
+        requests.append((params, timeout))
+        query = params["query"][0]
+        if "container_cpu_usage_seconds_total" in query:
+            value = "5"
+        elif "container_memory_working_set_bytes" in query:
+            value = "25"
+        elif "container_network_receive_bytes_total" in query:
+            value = "100"
+        else:
+            value = "50"
+        return _reply({
+            "status": "success",
+            "data": {"resultType": "matrix", "result": [{
+                "values": [[1000, value], [1015, str(float(value) + 1)]],
+            }]},
+        })
+
+    with patch.object(dash, "urlopen", opener):
+        response = client[0].get("/api/metrics/history?name=nginx-web&minutes=5")
+
+    assert response.status_code == 200
+    assert response.json["name"] == "nginx-web"
+    assert [sample["t"] for sample in response.json["samples"]] == [1000.0, 1015.0]
+    assert response.json["samples"][0] == {
+        "t": 1000.0, "cpu": 5.0, "mem": 25.0, "rx": 100.0, "tx": 50.0,
+    }
+    assert len(requests) == 4
+    assert all(params["step"] == ["15s"] and timeout == dash.HISTORY_TIMEOUT_S
+               for params, timeout in requests)
+    assert all('container_label_com_docker_compose_service="nginx-web"' in params["query"][0]
+               for params, _ in requests)
+
+
+def test_metrics_history_validates_parameters_and_requires_login():
+    anonymous = dash.app.test_client()
+    assert anonymous.get("/api/metrics/history?name=nginx-web").status_code == 401
+    client = new_client()
+    assert client.get("/api/metrics/history").status_code == 400
+    assert client.get("/api/metrics/history?name=nginx-web&minutes=abc").status_code == 400
+    assert client.get("/api/metrics/history?name=nginx-web&minutes=16").status_code == 400
+
+
+def test_metrics_history_reports_prometheus_errors(client):
+    def opener(url, timeout=None):
+        return _reply({"status": "error", "error": "query failed"})
+
+    with patch.object(dash, "urlopen", opener):
+        response = client[0].get("/api/metrics/history?name=nginx-web")
+
+    assert response.status_code == 503
+    assert response.json["error"] == "historical metrics unavailable"
+
+
+# ---------- admin sign-in ----------
+def test_api_needs_an_admin_session():
+    anonymous = dash.app.test_client()
+    assert anonymous.get("/api/containers").status_code == 401
+    assert anonymous.get("/api/stats").status_code == 401
+    assert anonymous.get("/api/metrics/history?name=nginx-web").status_code == 401
+    assert anonymous.get("/api/monitoring").status_code == 401
+    assert anonymous.post("/api/containers/nginx-web/restart", headers=HEADERS).status_code == 401
+
+
+def test_health_and_static_files_stay_open():
+    anonymous = dash.app.test_client()
+    assert anonymous.get("/api/health").json == {"status": "ok"}
+    assert anonymous.get("/static/js/app.js").status_code == 200
+
+
+def test_page_sends_anonymous_users_to_the_login_page():
+    r = dash.app.test_client().get("/")
+    assert r.status_code == 302 and r.headers["Location"] == "login"
+
+
+def test_login_page_is_served():
+    response = dash.app.test_client().get("/login")
+    html = response.get_data(as_text=True)
+    assert "Admin sign in" in html and 'name="csrf_token"' in html
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_login_rejects_bad_credentials_and_missing_csrf():
+    c = dash.app.test_client()
+    t = token_of(c)
+    bad = c.post("/login", data={"csrf_token": t, "username": "admin", "password": "nope"})
+    assert bad.status_code == 401
+    unknown = c.post("/login", data={"csrf_token": t, "username": "mallory",
+                                     "password": "AdminPass1"})
+    assert unknown.status_code == 401
+    assert c.post("/login", data={"username": "admin", "password": "AdminPass1"}).status_code == 400
+    assert c.get("/api/containers").status_code == 401
+
+
+def test_stale_login_form_gets_a_fresh_csrf_token():
+    c = dash.app.test_client()
+    response = c.post("/login", data={"csrf_token": "stale", "username": "admin",
+                                      "password": "AdminPass1"})
+    assert response.status_code == 400
+    assert b"Please submit this refreshed form." in response.data
+    token = re.search(rb'name="csrf_token" value="([^"]+)"', response.data).group(1).decode()
+    assert c.post("/login", data={"csrf_token": token, "username": "admin",
+                                  "password": "AdminPass1"}).status_code == 302
+
+
+def test_login_gives_access_and_logout_removes_it(client):
+    c, _ = client
+    assert c.get_cookie("admin_session") is not None
+    page = c.get("/")
+    assert page.status_code == 200 and b"Signed in as" in page.data
+    assert c.get("/api/containers").status_code == 200
+    assert page.headers["Cache-Control"] == "no-store"
+    stale = c.post("/logout", data={})
+    assert stale.status_code == 400  # needs the form token
+    assert b"please try again" in stale.data
+    token = re.search(rb'name="csrf_token" value="([^"]+)"', stale.data).group(1).decode()
+    assert c.post("/logout", data={"csrf_token": token}).status_code == 302
+    assert c.get("/api/containers").status_code == 401
+
+
+def test_stale_logout_form_is_not_accepted_and_returns_a_fresh_form(client):
+    c, _ = client
+    stale = c.post("/logout", data={"csrf_token": "stale"})
+    assert stale.status_code == 400
+    assert b"please try again" in stale.data
+    token = re.search(rb'name="csrf_token" value="([^"]+)"', stale.data).group(1).decode()
+    assert c.post("/logout", data={"csrf_token": token}).status_code == 302
+
+
+def test_other_role_sessions_are_not_accepted(monkeypatch):
+    """A cookie signed for another role (different key) must not open the dashboard."""
+    from flask.sessions import SecureCookieSessionInterface
+    import hashlib
+    other = dash.Flask("other")
+    other.config["SECRET_KEY"] = hashlib.sha256(b"test-secret-key-0123456789:staff").hexdigest()
+    serializer = SecureCookieSessionInterface().get_signing_serializer(other)
+    forged = serializer.dumps({"user": "admin", "role": "admin"})
+    c = dash.app.test_client()
+    c.set_cookie("admin_session", forged)
+    assert c.get("/api/containers").status_code == 401
+
+
+def load_dashboard(monkeypatch, **env):
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    name = f"dashboard_{uuid.uuid4().hex}"
+    spec = importlib.util.spec_from_file_location(name, DASHBOARD_APP)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_dashboard_refuses_to_start_without_secret_or_admin(monkeypatch):
+    with pytest.raises(RuntimeError):
+        load_dashboard(monkeypatch, PORTAL_SECRET_KEY="short")
+    with pytest.raises(RuntimeError):
+        load_dashboard(monkeypatch, PORTAL_SECRET_KEY="test-secret-key-0123456789", ADMIN_USERS="")

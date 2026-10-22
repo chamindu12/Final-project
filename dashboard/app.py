@@ -1,13 +1,19 @@
+import hashlib
+import hmac
 import json
+import math
 import os
+import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from urllib.error import URLError
+from urllib.parse import urlencode
 from urllib.request import urlopen
 
 import docker
 from docker.errors import DockerException, NotFound
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, abort, jsonify, redirect, render_template, request, session
 
 app = Flask(__name__)
 
@@ -18,11 +24,44 @@ MB = 1024 * 1024
 PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090").rstrip("/")
 GRAFANA_URL = os.environ.get("GRAFANA_URL", "http://grafana:3000").rstrip("/")
 MONITORING_TIMEOUT_S = 2
+HISTORY_STEP_S = 15
+HISTORY_MAX_MINUTES = 15
+HISTORY_TIMEOUT_S = 5
 
 # Control requests must carry this header. Browsers do not let other
 # websites add it to a cross-site request, which blocks CSRF.
 CSRF_HEADER = "X-Requested-With"
 CSRF_VALUE = "dashboard-ui"
+
+# ---------- admin sign-in ----------
+SECRET = os.environ.get("PORTAL_SECRET_KEY", "")
+if len(SECRET) < 16:
+    raise RuntimeError("PORTAL_SECRET_KEY is required (at least 16 characters)")
+
+
+def parse_users(raw):
+    """'admin:pw1,other:pw2' -> {'admin': 'pw1', 'other': 'pw2'}"""
+    users = {}
+    for item in raw.split(","):
+        name, sep, password = item.strip().partition(":")
+        if sep and name and password:
+            users[name] = password
+    return users
+
+
+ADMIN_USERS = parse_users(os.environ.get("ADMIN_USERS", ""))
+if not ADMIN_USERS:
+    raise RuntimeError("ADMIN_USERS needs at least one name:password pair")
+
+app.config.update(
+    # a different signing key per role: staff and guest sessions are never valid here
+    SECRET_KEY=hashlib.sha256(f"{SECRET}:admin".encode()).hexdigest(),
+    SESSION_COOKIE_NAME="admin_session",
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+)
+OPEN_PATHS = {"/api/health", "/login"}  # everything else needs an admin session
 
 _client = None
 
@@ -166,9 +205,34 @@ def stats_for(c):
         return {"running": False, "error": "stats unavailable"}
 
 
+def csrf_token():
+    if "csrf" not in session:
+        session["csrf"] = secrets.token_urlsafe(24)
+    return session["csrf"]
+
+
+app.jinja_env.globals["csrf_token"] = csrf_token
+
+
+def form_token_ok():
+    sent = request.form.get("csrf_token", "")
+    return bool(sent) and hmac.compare_digest(sent, session.get("csrf", ""))
+
+
+@app.before_request
+def require_login():
+    if request.path in OPEN_PATHS or request.path.startswith("/static/"):
+        return None
+    if session.get("role") == "admin" and session.get("user"):
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "login required"}), 401
+    return redirect("login")  # relative, so it works under the /dashboard/ prefix
+
+
 @app.after_request
 def no_store(resp):
-    if request.path.startswith("/api/"):
+    if not request.path.startswith("/static/"):
         resp.headers["Cache-Control"] = "no-store"
     return resp
 
@@ -183,9 +247,52 @@ def handle_docker_error(e):
     return jsonify({"error": "docker engine error", "detail": str(e)}), 503
 
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        if not form_token_ok():
+            session.pop("csrf", None)
+            return render_template(
+                "login.html",
+                error="This sign-in form expired or was opened in another tab. "
+                      "Please submit this refreshed form.",
+            ), 400
+        name = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        expected = ADMIN_USERS.get(name)
+        # always compare, even for unknown names, so timing does not reveal valid users
+        same = hmac.compare_digest(password.encode(), (expected or "-").encode())
+        if expected is not None and same:
+            session.clear()
+            session.permanent = True
+            session["user"] = name
+            session["role"] = "admin"
+            csrf_token()
+            return redirect("./")
+        return render_template("login.html", error="Invalid username or password."), 401
+    if session.get("role") == "admin":
+        return redirect("./")
+    return render_template("login.html", error=None)
+
+
+@app.post("/logout")
+def logout():
+    if not form_token_ok():
+        session.pop("csrf", None)
+        return render_template(
+            "index.html",
+            project=PROJECT,
+            user=session.get("user"),
+            error="This sign-out form expired or was opened in another tab. "
+                  "A fresh form is ready; please try again.",
+        ), 400
+    session.clear()
+    return redirect("login")
+
+
 @app.get("/")
 def index():
-    return render_template("index.html", project=PROJECT)
+    return render_template("index.html", project=PROJECT, user=session.get("user"), error=None)
 
 
 @app.get("/api")
@@ -197,6 +304,7 @@ def api_index():
             "GET /api/monitoring",
             "GET /api/containers",
             "GET /api/stats",
+            "GET /api/metrics/history?name=<container>&minutes=5",
             "GET /api/containers/<name>/stats",
             "GET /api/containers/<name>/logs?tail=100",
             "POST /api/containers/<name>/start|stop|restart "
@@ -278,6 +386,82 @@ def all_stats():
     })
 
 
+def _prometheus_range_values(query, start, end):
+    params = urlencode({
+        "query": query,
+        "start": f"{start:.3f}",
+        "end": f"{end:.3f}",
+        "step": f"{HISTORY_STEP_S}s",
+    })
+    url = f"{PROMETHEUS_URL}/api/v1/query_range?{params}"
+    with urlopen(url, timeout=HISTORY_TIMEOUT_S) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if payload.get("status") != "success":
+        raise ValueError(payload.get("error", "Prometheus query failed"))
+    data = payload.get("data", {})
+    if data.get("resultType") != "matrix" or not isinstance(data.get("result"), list):
+        raise ValueError("invalid Prometheus range-query response")
+
+    values = {}
+    for series in data["result"]:
+        samples = series.get("values", [])
+        if not isinstance(samples, list):
+            raise ValueError("invalid Prometheus range-query series")
+        for sample in samples:
+            if not isinstance(sample, list) or len(sample) != 2:
+                raise ValueError("invalid Prometheus range-query sample")
+            timestamp = float(sample[0])
+            value = float(sample[1])
+            if math.isfinite(timestamp) and math.isfinite(value):
+                key = round(timestamp, 3)
+                values[key] = values.get(key, 0.0) + value
+    return values
+
+
+@app.get("/api/metrics/history")
+def metrics_history():
+    name = request.args.get("name", "")
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    try:
+        minutes = int(request.args.get("minutes", "5"))
+    except ValueError:
+        return jsonify({"error": "minutes must be an integer"}), 400
+    if not 1 <= minutes <= HISTORY_MAX_MINUTES:
+        return jsonify({"error": f"minutes must be between 1 and {HISTORY_MAX_MINUTES}"}), 400
+
+    container = get_container(name)
+    service = container.labels.get("com.docker.compose.service", container.name)
+    matcher = f'container_label_com_docker_compose_service={json.dumps(service)}'
+    queries = {
+        "cpu": f'sum by (name) (rate(container_cpu_usage_seconds_total{{{matcher}}}[1m])) * 100',
+        "mem": (
+            f'100 * sum by (name) (container_memory_working_set_bytes{{{matcher}}}) '
+            f'/ on(name) sum by (name) (container_spec_memory_limit_bytes{{{matcher}}} > 0)'
+        ),
+        "rx": f'sum by (name) (rate(container_network_receive_bytes_total{{{matcher}}}[1m]))',
+        "tx": f'sum by (name) (rate(container_network_transmit_bytes_total{{{matcher}}}[1m]))',
+    }
+    end = time.time()
+    start = end - minutes * 60
+    try:
+        with ThreadPoolExecutor(max_workers=len(queries)) as pool:
+            futures = {key: pool.submit(_prometheus_range_values, query, start, end)
+                       for key, query in queries.items()}
+            results = {key: future.result() for key, future in futures.items()}
+    except (URLError, OSError, TimeoutError, ValueError, TypeError, AttributeError) as exc:
+        app.logger.warning("Prometheus history query failed for %s: %s", container.name, exc)
+        return jsonify({"error": "historical metrics unavailable", "detail": str(exc)}), 503
+
+    timestamps = sorted(set().union(*(series.keys() for series in results.values())))
+    samples = [
+        {"t": timestamp, **{key: results[key].get(timestamp) for key in queries}}
+        for timestamp in timestamps
+    ]
+    return jsonify({"name": container.name, "end": end, "step": HISTORY_STEP_S,
+                    "samples": samples})
+
+
 @app.get("/api/containers/<name>/stats")
 def container_stats(name):
     c = get_container(name)
@@ -316,3 +500,4 @@ def container_action(name, action):
     actions[action](c)
     c.reload()
     return jsonify(summary(c))
+    

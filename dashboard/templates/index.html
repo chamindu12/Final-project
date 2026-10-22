@@ -22,9 +22,9 @@
     <div class="nav-label">Manage</div>
     <nav class="nav-list">
       <a href="#top" class="active">Overview</a>
-      <a href="#monitoring">Monitoring</a>
       <a href="#containers">Containers</a>
       <a href="#resources">Resources</a>
+      <a href="#monitoring">Monitoring</a>
       <a href="#logs">Logs</a>
     </nav>
     <div class="side-foot">
@@ -37,12 +37,20 @@
   <main id="top">
     <header class="topbar">
       <div>
-        <h2>Overview</h2>
+        <h1>Overview</h1>
         <p>Real-time status of the containerised network services</p>
       </div>
-      <div class="pill" id="livePill"><span class="dot"></span><span id="liveText">Connecting...</span></div>
+      <div class="topbar-right">
+        <div class="pill" id="livePill"><span class="dot"></span><span id="liveText">Connecting...</span></div>
+        <form class="signout" method="post" action="logout">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <span class="muted">Signed in as <strong>{{ user }}</strong></span>
+          <button class="btn btn-sm btn-outline-secondary" type="submit">Sign out</button>
+        </form>
+      </div>
     </header>
 
+    {% if error %}<div class="banner warn" role="alert">{{ error }}</div>{% endif %}
     <div id="alertBox"></div>
 
     <section class="kpis">
@@ -78,13 +86,17 @@
           <div class="monitoring-service-title">Prometheus</div>
           <div class="monitoring-value" id="prometheusText">Checking targets...</div>
           <span class="badge-s off" id="prometheusBadge">Checking</span>
-          <a class="monitoring-link" id="prometheusLink" href="http://localhost:9090/targets" target="_blank" rel="noopener">Prometheus targets</a>
+          <div class="monitoring-links">
+            <a id="prometheusLink" href="http://localhost:9090/targets" target="_blank" rel="noopener">Open rometheus targets</a>
+          </div>
         </div>
         <div class="monitoring-service" id="grafanaService">
           <div class="monitoring-service-title">Grafana</div>
           <div class="monitoring-value" id="grafanaText">Checking health...</div>
           <span class="badge-s off" id="grafanaBadge">Checking</span>
-          <a class="monitoring-link" id="grafanaLink" href="http://localhost:3000" target="_blank" rel="noopener">Open Grafana</a>
+          <div class="monitoring-links">
+            <a id="grafanaLink" href="http://localhost:3000" target="_blank" rel="noopener">Open Grafana health</a>
+          </div>
         </div>
       </div>
     </section>
@@ -121,6 +133,7 @@
           </label>
         </div>
         <div class="chart-wrap"><canvas id="chartCanvas"></canvas></div>
+        <div class="muted p-3" id="chartStatus" role="status" aria-live="polite"></div>
         <div class="network-chart">
           <div class="network-chart-h">
             <h3>Network I/O</h3>
