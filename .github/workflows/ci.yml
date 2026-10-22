@@ -24,11 +24,29 @@ jobs:
           dockerfile: dashboard/Dockerfile
           failure-threshold: warning
 
+      - name: Lint portal Dockerfile (hadolint)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: portal/Dockerfile
+          failure-threshold: warning
+
+      - name: Lint client Dockerfile (hadolint)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: services/client/Dockerfile
+          failure-threshold: warning
+          ignore: DL3018
+
       - name: Python lint and unit tests
         run: |
-          pip install -r dashboard/requirements.txt flake8 pytest
-          flake8 dashboard/app.py tests --max-line-length=100
+          pip install -r dashboard/requirements.txt -r portal/requirements.txt flake8 pytest
+          flake8 dashboard/app.py portal/app.py tests --max-line-length=100
           pytest tests -q
+
+      - name: Check gateway configuration (nginx syntax)
+        run: |
+          docker run --rm -v "$PWD/services/reverse-proxy/default.conf:/etc/nginx/conf.d/default.conf:ro" \
+            nginxinc/nginx-unprivileged:1.27-alpine nginx -t
 
       - name: Validate monitoring configuration
         run: |
@@ -48,7 +66,10 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Create .env from example
-        run: cp .env.example .env
+        run: |
+          cp .env.example .env
+          socket_gid=$(stat -c '%g' /var/run/docker.sock)
+          sed -i "s/^DOCKER_GID=.*/DOCKER_GID=$socket_gid/" .env
 
       - name: Build images
         run: docker compose build
@@ -62,14 +83,23 @@ jobs:
       - name: Smoke test reverse proxy
         run: |
           curl -fsS http://localhost:8080/healthz
-          curl -sI http://localhost:8080/ | head -1 | grep -E ' (301|302) '
-          curl -sI http://localhost:8080/ | grep -i '^location: /dashboard/'
-          curl -fsS http://localhost:8080/web/ | grep -q "Hello from nginx-web"
+          curl -fsS http://localhost:8080/ | grep -q "NetLab Network Services"
+          curl -fsS http://localhost:8080/web/ | grep -q "NetLab Network Services"
 
-      - name: Smoke test dashboard page and API
+      - name: Smoke test dashboard sign-in, page and API
         run: |
-          curl -fsS http://localhost:8080/dashboard/ | grep -q "NetLab Control"
-          curl -fsS http://localhost:8080/dashboard/api/health | grep -q '"status":"ok"'
+          base=http://localhost:8080/dashboard
+          pair=$(grep '^ADMIN_USERS=' .env | cut -d= -f2- | cut -d, -f1)
+          user=${pair%%:*}; pass=${pair#*:}
+          curl -fsS $base/api/health | grep -q '"status":"ok"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' $base/api/containers)" = 401
+          jar=$(mktemp)
+          tok=$(curl -fsS -c "$jar" $base/login | sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p')
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -c "$jar" --data-urlencode "csrf_token=$tok" --data-urlencode "username=$user" --data-urlencode "password=wrong" $base/login)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -c "$jar" --data-urlencode "csrf_token=$tok" --data-urlencode "username=$user" --data-urlencode "password=$pass" $base/login)" = 302
+          curl -fsS -b "$jar" $base/ | grep -q "NetLab Control"
+          curl -fsS -b "$jar" $base/api/containers | grep -q nginx-web
+          echo "ADMIN_JAR=$jar" >> "$GITHUB_ENV"
 
       - name: Check dashboard files are served
         run: |
@@ -100,12 +130,39 @@ jobs:
           curl -s http://localhost:9090/api/v1/targets
           exit 1
 
+      - name: Smoke test dashboard historical chart API
+        run: |
+          for i in $(seq 1 12); do
+            if response=$(curl -fsS -b "$ADMIN_JAR" -G \
+              --data-urlencode "name=nginx-web" \
+              --data-urlencode "minutes=5" \
+              http://localhost:8080/dashboard/api/metrics/history) &&
+              printf '%s' "$response" | python3 -c '
+          import json, sys
+          data = json.load(sys.stdin)
+          samples = data.get("samples", [])
+          assert data.get("name") == "nginx-web", data
+          assert samples, "Prometheus returned no history samples"
+          assert any(sample.get("mem") is not None for sample in samples), samples
+          print(f"Received {len(samples)} historical chart samples")
+          '; then
+              exit 0
+            fi
+            echo "Waiting for historical samples from Prometheus (attempt $i/12)"
+            sleep 5
+          done
+          echo "Dashboard historical chart API did not return usable metrics"
+          exit 1
+
       - name: Check Grafana provisioning
         run: |
           pw=$(grep '^GRAFANA_ADMIN_PASSWORD=' .env | cut -d= -f2-)
           curl -fsS -u "admin:$pw" http://localhost:3000/api/datasources/uid/prometheus | grep -q '"type":"prometheus"'
           curl -fsS -u "admin:$pw" -G --data-urlencode "query=Container Network Services" \
             http://localhost:3000/api/search | grep -q "Container Network Services"
+
+      - name: Check dashboard monitoring status
+        run: curl -fsS -b "$ADMIN_JAR" http://localhost:8080/dashboard/api/monitoring | grep -q '"ok":true'
 
       - name: Test custom DNS
         run: |
@@ -121,8 +178,8 @@ jobs:
             exit 1
           fi
 
-      - name: Check dashboard monitoring status
-        run: curl -fsS http://localhost:8080/dashboard/api/monitoring | grep -q '"ok":true'
+      - name: Scenario policy checks (admin, staff, guest)
+        run: bash scripts/scenario-check.sh
 
       - name: Show logs on failure
         if: failure()

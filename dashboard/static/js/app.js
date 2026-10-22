@@ -8,8 +8,9 @@
   const STATS_GAP_MS = 1000;
   const LOG_MS = 2000;
   const MONITORING_MS = 10000;
-  const HISTORY_MS = 15 * 60 * 1000;
+  const HISTORY_REFRESH_MS = 15000;
   const MAX_CONTIGUOUS_GAP_MS = 10000;
+  const HISTORY_GAP_MS = 30000;
   const DEFAULT_HISTORY_MINUTES = 5;
   const PAST = { start: "started", stop: "stopped", restart: "restarted" };
 
@@ -18,7 +19,6 @@
     stats: {},
     rates: {},
     lastNet: {},
-    netBreakPending: new Set(),
     restartMeta: {},
     history: {},
     monitoring: null,
@@ -40,6 +40,10 @@
     const res = await fetch(url, Object.assign({ cache: "no-store" }, opts || {}));
     let body = null;
     try { body = await res.json(); } catch (_) { /* reply was not JSON */ }
+    if (res.status === 401) {
+      window.location.href = "login"; // session ended: back to the admin sign-in page
+      throw new Error("login required");
+    }
     if (!res.ok) {
       throw new Error((body && (body.error || body.detail)) || "HTTP " + res.status);
     }
@@ -280,6 +284,7 @@
   let chart = null;
   let networkChart = null;
   let historyMinutes = DEFAULT_HISTORY_MINUTES;
+  let historyRequestId = 0;
   let rateUnit = { label: "B/s", divisor: 1 };
 
   function fmtChartTime(value) {
@@ -412,6 +417,51 @@
     }
   }
 
+  async function loadChartHistory() {
+    const name = state.selected;
+    if (!name) return;
+    const requestId = ++historyRequestId;
+    $("chartStatus").textContent = "Loading saved metrics...";
+    try {
+      const data = await getJSON(API + "/metrics/history?name=" + enc(name) +
+        "&minutes=" + historyMinutes);
+      if (requestId !== historyRequestId || name !== state.selected) return;
+      const offset = Date.now() - data.end * 1000;
+      let previousTime = null;
+      state.history[name] = data.samples.map((sample) => {
+        const t = Math.round(sample.t * 1000 + offset);
+        const gapBefore = previousTime !== null && (sample.t * 1000 - previousTime) > HISTORY_GAP_MS;
+        const breakAt = gapBefore ? (previousTime + sample.t * 1000) / 2 + offset : t - 1;
+        previousTime = sample.t * 1000;
+        return {
+          t: t,
+          cpu: sample.cpu,
+          mem: sample.mem,
+          rx: sample.rx,
+          tx: sample.tx,
+          gapBefore: gapBefore,
+          netBreakBefore: false,
+          breakAt: breakAt,
+        };
+      });
+      $("chartStatus").textContent = data.samples.length
+        ? "Historical metrics from Prometheus · refreshed " +
+          new Date().toLocaleTimeString([], { hour12: false })
+        : "No historical metrics are available for this container and time range.";
+      refreshChart();
+    } catch (e) {
+      if (requestId !== historyRequestId || name !== state.selected) return;
+      $("chartStatus").textContent = "Could not load historical metrics: " + e.message;
+    }
+  }
+
+  function scheduleChartHistory() {
+    setTimeout(() => {
+      if (!document.hidden) loadChartHistory();
+      scheduleChartHistory();
+    }, HISTORY_REFRESH_MS);
+  }
+
   /* ---------- polling: containers ---------- */
   function renderAll() {
     renderTable();
@@ -437,6 +487,7 @@
         state.selected = def ? def.name : null;
         renderAll();
         refreshChart();
+        loadChartHistory();
         loadLogs();
         return;
       }
@@ -459,21 +510,15 @@
     Object.keys(state.stats).forEach((name) => {
       const sample = state.stats[name];
       if (!sample.running) {
-        state.netBreakPending.add(name);
         delete state.lastNet[name];
         delete state.rates[name];
         return;
       }
 
-      // Chart x positions use the browser clock (arrival time). The server clock can
-      // drift from the browser clock on WSL2, which would push every sample outside
-      // the visible time window. d.ts (server time) is used only for the rate maths.
       const ts = Date.now();
       const prev = state.lastNet[name];
-      const history = state.history[name] || (state.history[name] = []);
-      const previousSample = history.length ? history[history.length - 1] : null;
       const elapsedMs = prev ? (d.ts - prev.ts) * 1000 : null;
-      const gapBefore = Boolean(previousSample && ts - previousSample.t > MAX_CONTIGUOUS_GAP_MS);
+      const gap = Boolean(prev && ts - prev.at > MAX_CONTIGUOUS_GAP_MS);
       const container = containersByName.get(name);
       const meta = container ? {
         restartCount: container.restart_count,
@@ -486,13 +531,9 @@
       if (meta) state.restartMeta[name] = meta;
       const countersReset = Boolean(restartObserved || (prev &&
         (sample.net_rx_bytes < prev.rx || sample.net_tx_bytes < prev.tx)));
-      const wasInterrupted = !prev && state.netBreakPending.has(name);
-      const netBreakBefore = Boolean(gapBefore || countersReset || wasInterrupted);
-      const breakStart = previousSample ? previousSample.t : (prev ? prev.at : ts - 1);
-      const breakAt = gapBefore ? (breakStart + ts) / 2 : Math.max(breakStart + 1, ts - 1);
 
       let rate = null;
-      if (prev && !gapBefore && !countersReset && elapsedMs > 200) {
+      if (prev && !gap && !countersReset && elapsedMs > 200) {
         const seconds = elapsedMs / 1000;
         const rxBps = (sample.net_rx_bytes - prev.rx) / seconds;
         const txBps = (sample.net_tx_bytes - prev.tx) / seconds;
@@ -502,26 +543,9 @@
         delete state.rates[name];
       }
 
-      history.push({
-        t: ts,
-        cpu: sample.cpu_percent,
-        mem: sample.mem_percent,
-        rx: rate ? rate.rxBps : null,
-        tx: rate ? rate.txBps : null,
-        gapBefore: gapBefore,
-        netBreakBefore: netBreakBefore,
-        breakAt: breakAt,
-      });
       state.lastNet[name] = {
         rx: sample.net_rx_bytes, tx: sample.net_tx_bytes, ts: d.ts, at: ts,
       };
-      state.netBreakPending.delete(name);
-    });
-
-    const cutoff = Date.now() - HISTORY_MS;
-    Object.keys(state.history).forEach((name) => {
-      const history = state.history[name];
-      while (history.length && history[0].t < cutoff) history.shift();
     });
   }
 
@@ -532,7 +556,6 @@
         state.lastOk = Date.now();
         renderTable();
         renderKpis();
-        refreshChart();
       } catch (_) { /* the live pill shows the problem */ }
     }
     setTimeout(statsLoop, STATS_GAP_MS);
@@ -561,8 +584,13 @@
 
   $("historyWindow").addEventListener("change", (event) => {
     historyMinutes = Number(event.target.value) || DEFAULT_HISTORY_MINUTES;
-    refreshChart();
+    loadChartHistory();
   });
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) loadChartHistory();
+  });
+  scheduleChartHistory();
 
   /* ---------- actions ---------- */
   function toast(msg, kind) {
@@ -592,6 +620,7 @@
     renderTable();
     renderDetails();
     refreshChart();
+    loadChartHistory();
     syncLogSelect();
     state.logLines = [];
     loadLogs();

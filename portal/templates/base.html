@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{% endblock %} | NetLab {{ role|capitalize }} Portal</title>
+<style>
+  :root { --accent: {{ '#0f766e' if role == 'staff' else '#b45309' }}; --soft: {{ '#ccfbf1' if role == 'staff' else '#fef3c7' }}; --ink: #0f172a; --muted: #64748b; --line: #e5e9f0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f3f5f9; color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  header { background: var(--accent); color: #fff; padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  header form { margin: 0; display: flex; align-items: center; gap: 12px; }
+  main { max-width: 860px; margin: 24px auto; padding: 0 16px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 18px; }
+  .card h2 { margin: 0 0 10px; font-size: 16px; }
+  .zone { background: var(--soft); border-color: transparent; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .muted { color: var(--muted); font-size: 13px; }
+  label { display: block; font-weight: 600; margin: 10px 0 4px; }
+  input[type=text], input[type=password], input[type=file], textarea { width: 100%; padding: 9px 11px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; background: #fff; }
+  button, .btn { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; cursor: pointer; text-decoration: none; display: inline-block; }
+  button.plain { background: transparent; border: 1px solid #fff; padding: 5px 12px; }
+  .error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+  ul.plain { padding-left: 18px; margin: 0; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NetLab {{ role|capitalize }} Portal</h1>
+  {% if user %}
+  <form method="post" action="/logout">
+    <span>Signed in as <strong>{{ user }}</strong></span>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="plain" type="submit">Sign out</button>
+  </form>
+  {% endif %}
+</header>
+<main>
+  <div class="card zone">
+    <strong>Your network position</strong>
+    <div class="mono">address {{ client.ip }} &middot; zone {{ client.zone }}</div>
+    <!-- Seen by the gateway (nginx-proxy). The zone decides which portals this address may reach. -->
+  </div>
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>
