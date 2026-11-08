@@ -28,6 +28,9 @@ volumes:
   prometheus_data:
   grafana_data:
   staff_data:
+  admin_sessions:
+  staff_sessions:
+  guest_sessions:
 
 services:
   nginx-web:
@@ -95,9 +98,12 @@ services:
       - "${DOCKER_GID:-999}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - admin_sessions:/sessions
     environment:
       COMPOSE_PROJECT: netlab
       ADMIN_USERS: ${ADMIN_USERS:?Set ADMIN_USERS in .env (name:password)}
+      SESSION_DB_PATH: /sessions/sessions.sqlite3
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-28800}
       PORTAL_SECRET_KEY: ${PORTAL_SECRET_KEY:?Set PORTAL_SECRET_KEY in .env}
     read_only: true
     tmpfs:
@@ -126,11 +132,14 @@ services:
       PORTAL_USERS: ${STAFF_USERS:?Set STAFF_USERS in .env (name:password,name:password)}
       PORTAL_SECRET_KEY: ${PORTAL_SECRET_KEY:?Set PORTAL_SECRET_KEY in .env}
       DATA_DIR: /data
+      SESSION_DB_PATH: /sessions/sessions.sqlite3
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-28800}
     networks:
       lab_net:
         ipv4_address: 172.20.0.41
     volumes:
       - staff_data:/data
+      - staff_sessions:/sessions
     read_only: true
     tmpfs:
       - /tmp
@@ -155,10 +164,14 @@ services:
     environment:
       PORTAL_ROLE: guest
       PORTAL_USERS: ${GUEST_USERS:?Set GUEST_USERS in .env (name:password,name:password)}
+      SESSION_DB_PATH: /sessions/sessions.sqlite3
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-28800}
       PORTAL_SECRET_KEY: ${PORTAL_SECRET_KEY:?Set PORTAL_SECRET_KEY in .env}
     networks:
       lab_net:
         ipv4_address: 172.20.0.42
+    volumes:
+      - guest_sessions:/sessions
     read_only: true
     tmpfs:
       - /tmp
