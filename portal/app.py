@@ -9,6 +9,8 @@ import hmac
 import json
 import os
 import secrets
+import sqlite3
+import tempfile
 import threading
 from datetime import datetime, timezone
 from datetime import timedelta
@@ -17,6 +19,8 @@ from pathlib import Path
 from flask import (Flask, Response, abort, jsonify, redirect, render_template,
                    request, send_from_directory, session, stream_with_context, url_for)
 from werkzeug.utils import secure_filename
+
+from session_store import SessionStore
 
 ROLE = os.environ.get("PORTAL_ROLE", "guest")
 if ROLE not in ("staff", "guest"):
@@ -62,6 +66,11 @@ VISITOR_GUIDE = (
     "3. Internal services, file sharing and management tools are staff/admin only.\n"
 )
 
+
+SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", "28800"))
+if not 1 <= SESSION_TTL_SECONDS <= 86400:
+    raise RuntimeError("SESSION_TTL_SECONDS must be between 1 and 86400")
+
 app = Flask(__name__)
 app.config.update(
     # each role gets its own signing key, so a staff session can never be valid on the guest portal
@@ -69,8 +78,17 @@ app.config.update(
     SESSION_COOKIE_NAME=f"{ROLE}_session",
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+    PERMANENT_SESSION_LIFETIME=timedelta(seconds=SESSION_TTL_SECONDS),
+    SESSION_REFRESH_EACH_REQUEST=False,
     MAX_CONTENT_LENGTH=MAX_UPLOAD_MB * 1024 * 1024,
+)
+
+# Persisted in a dedicated writable volume in Compose.
+auth_sessions = SessionStore(
+    os.environ.get("SESSION_DB_PATH", os.path.join(
+        tempfile.gettempdir(), f"netlab-auth-{os.getuid()}", ROLE,
+        "sessions.sqlite3")),
+    app.config["SECRET_KEY"], ROLE,
 )
 
 if CAN_WRITE:
@@ -95,7 +113,14 @@ def client_info():
 
 
 def current_user():
-    return session.get("user") if session.get("role") == ROLE else None
+    name = session.get("user")
+    password = USERS.get(name) if isinstance(name, str) else None
+    if (session.get("role") == ROLE
+            and auth_sessions.valid(session.get("sid"), name, password)):
+        return name
+    if "user" in session or "sid" in session:
+        session.clear()
+    return None
 
 
 def login_required(view):
@@ -140,8 +165,14 @@ def list_files():
 def check_csrf():
     if request.method == "POST":
         sent = request.form.get("csrf_token", "")
-        if not sent or not hmac.compare_digest(sent, session.get("csrf", "")):
+        if not sent or not hmac.compare_digest(sent.encode(), session.get("csrf", "").encode()):
             abort(400, "Invalid or missing CSRF token. Reload the page and try again.")
+
+
+@app.errorhandler(sqlite3.Error)
+def session_store_unavailable(error):
+    app.logger.error("Session database unavailable: %s", error)
+    return jsonify({"error": "sign-in service temporarily unavailable"}), 503
 
 
 @app.after_request
@@ -174,10 +205,13 @@ def login():
         # always compare, even for unknown names, so timing does not reveal valid users
         same = hmac.compare_digest(password.encode(), (expected or "-").encode())
         if expected is not None and same:
+            auth_sessions.revoke(session.get("sid"))
             session.clear()
             session.permanent = True
             session["user"] = name
             session["role"] = ROLE
+            session["sid"] = auth_sessions.create(
+                name, expected, SESSION_TTL_SECONDS)
             csrf_token()
             return redirect(url_for("home"))
         return render_template("login.html", error="Invalid username or password."), 401
@@ -185,7 +219,9 @@ def login():
 
 
 @app.post("/logout")
+@login_required
 def logout():
+    auth_sessions.revoke(session.get("sid"))
     session.clear()
     return redirect(url_for("login"))
 

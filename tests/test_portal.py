@@ -19,6 +19,8 @@ def load(monkeypatch, role, users, data_dir, **extra):
     monkeypatch.setenv("PORTAL_SECRET_KEY", SECRET)
     monkeypatch.setenv("PORTAL_USERS", users)
     monkeypatch.setenv("DATA_DIR", str(data_dir))
+    monkeypatch.setenv("SESSION_DB_PATH", str(data_dir / "sessions.sqlite3"))
+    monkeypatch.syspath_prepend(os.path.dirname(PORTAL_APP))
     for key, value in extra.items():
         monkeypatch.setenv(key, value)
     name = f"portal_{role}_{uuid.uuid4().hex}"

@@ -4,6 +4,8 @@ import json
 import math
 import os
 import secrets
+import sqlite3
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -14,6 +16,8 @@ from urllib.request import urlopen
 import docker
 from docker.errors import DockerException, NotFound
 from flask import Flask, jsonify, redirect, render_template, request, session
+
+from session_store import SessionStore
 
 app = Flask(__name__)
 
@@ -53,14 +57,27 @@ ADMIN_USERS = parse_users(os.environ.get("ADMIN_USERS", ""))
 if not ADMIN_USERS:
     raise RuntimeError("ADMIN_USERS needs at least one name:password pair")
 
+SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", "28800"))
+if not 1 <= SESSION_TTL_SECONDS <= 86400:
+    raise RuntimeError("SESSION_TTL_SECONDS must be between 1 and 86400")
+
 app.config.update(
     # a different signing key per role: staff and guest sessions are never valid here
     SECRET_KEY=hashlib.sha256(f"{SECRET}:admin".encode()).hexdigest(),
     SESSION_COOKIE_NAME="admin_session",
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+    PERMANENT_SESSION_LIFETIME=timedelta(seconds=SESSION_TTL_SECONDS),
+    SESSION_REFRESH_EACH_REQUEST=False,
 )
+# Persisted in a dedicated writable volume in Compose.
+auth_sessions = SessionStore(
+    os.environ.get("SESSION_DB_PATH", os.path.join(
+        tempfile.gettempdir(), f"netlab-auth-{os.getuid()}", "admin",
+        "sessions.sqlite3")),
+    app.config["SECRET_KEY"], "admin",
+)
+
 OPEN_PATHS = {"/api/health", "/login"}  # everything else needs an admin session
 
 _client = None
@@ -214,20 +231,37 @@ def csrf_token():
 app.jinja_env.globals["csrf_token"] = csrf_token
 
 
+def authenticated_user():
+    name = session.get("user")
+    password = ADMIN_USERS.get(name) if isinstance(name, str) else None
+    if (session.get("role") == "admin"
+            and auth_sessions.valid(session.get("sid"), name, password)):
+        return name
+    if "user" in session or "sid" in session:
+        session.clear()
+    return None
+
+
 def form_token_ok():
     sent = request.form.get("csrf_token", "")
-    return bool(sent) and hmac.compare_digest(sent, session.get("csrf", ""))
+    return bool(sent) and hmac.compare_digest(sent.encode(), session.get("csrf", "").encode())
 
 
 @app.before_request
 def require_login():
     if request.path in OPEN_PATHS or request.path.startswith("/static/"):
         return None
-    if session.get("role") == "admin" and session.get("user"):
+    if authenticated_user():
         return None
     if request.path.startswith("/api/"):
         return jsonify({"error": "login required"}), 401
     return redirect("login")  # relative, so it works under the /dashboard/ prefix
+
+
+@app.errorhandler(sqlite3.Error)
+def session_store_unavailable(error):
+    app.logger.error("Session database unavailable: %s", error)
+    return jsonify({"error": "sign-in service temporarily unavailable"}), 503
 
 
 @app.after_request
@@ -263,14 +297,17 @@ def login():
         # always compare, even for unknown names, so timing does not reveal valid users
         same = hmac.compare_digest(password.encode(), (expected or "-").encode())
         if expected is not None and same:
+            auth_sessions.revoke(session.get("sid"))
             session.clear()
             session.permanent = True
             session["user"] = name
             session["role"] = "admin"
+            session["sid"] = auth_sessions.create(
+                name, expected, SESSION_TTL_SECONDS)
             csrf_token()
             return redirect("./")
         return render_template("login.html", error="Invalid username or password."), 401
-    if session.get("role") == "admin":
+    if authenticated_user():
         return redirect("./")
     return render_template("login.html", error=None)
 
@@ -286,6 +323,7 @@ def logout():
             error="This sign-out form expired or was opened in another tab. "
                   "A fresh form is ready; please try again.",
         ), 400
+    auth_sessions.revoke(session.get("sid"))
     session.clear()
     return redirect("login")
 
@@ -494,9 +532,11 @@ def container_action(name, action):
     }
     if action not in actions:
         return jsonify({"error": "action must be start, stop or restart"}), 400
-    if name in PROTECTED and action != "start":
-        return jsonify({"error": f"{name} is protected; {action} is not allowed"}), 403
     c = get_container(name)
+    # Docker accepts names, short IDs and full IDs. Check the resolved service too.
+    service = c.labels.get("com.docker.compose.service")
+    if action != "start" and (c.name in PROTECTED or service in PROTECTED):
+        return jsonify({"error": f"{c.name} is protected; {action} is not allowed"}), 403
     actions[action](c)
     c.reload()
     return jsonify(summary(c))

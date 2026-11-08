@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import uuid
 from unittest.mock import MagicMock, patch
 from urllib.error import URLError
@@ -16,6 +17,8 @@ from docker.errors import NotFound
 DASHBOARD_APP = os.path.join(os.path.dirname(__file__), "..", "dashboard", "app.py")
 os.environ.setdefault("PORTAL_SECRET_KEY", "test-secret-key-0123456789")
 os.environ.setdefault("ADMIN_USERS", "admin:AdminPass1")
+_session_directory = tempfile.TemporaryDirectory()
+os.environ["SESSION_DB_PATH"] = os.path.join(_session_directory.name, "admin.sqlite3")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "dashboard"))
 import app as dash  # noqa: E402
 

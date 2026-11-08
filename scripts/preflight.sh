@@ -11,9 +11,9 @@ val() { grep -E "^$2=" "$1" 2>/dev/null | head -1 | cut -d= -f2-; }
 echo "== files"
 missing=""
 for f in docker-compose.yml .env .env.example .gitignore \
-  portal/app.py portal/Dockerfile portal/requirements.txt \
+  portal/app.py portal/session_store.py portal/Dockerfile portal/requirements.txt \
   portal/templates/base.html portal/templates/login.html portal/templates/home.html \
-  dashboard/app.py dashboard/Dockerfile dashboard/requirements.txt \
+  dashboard/app.py dashboard/session_store.py dashboard/Dockerfile dashboard/requirements.txt \
   dashboard/templates/index.html dashboard/templates/login.html \
   dashboard/static/js/app.js dashboard/static/css/app.css \
   dashboard/static/vendor/chart.umd.js dashboard/static/vendor/bootstrap.min.css \
@@ -23,7 +23,7 @@ for f in docker-compose.yml .env .env.example .gitignore \
   monitoring/grafana/provisioning/datasources/prometheus.yml \
   monitoring/grafana/provisioning/dashboards/dashboards.yml \
   monitoring/grafana/dashboards/container-network-services.json \
-  scripts/scenario-check.sh tests/test_portal.py; do
+  scripts/scenario-check.sh scripts/auth-check.py tests/test_portal.py tests/test_auth_security.py; do
   [ -f "$f" ] && pass || missing="$missing $f"
 done
 [ -z "$missing" ] && echo "OK    all expected files are present" || fail "missing:$missing (names are case-sensitive on Linux)"

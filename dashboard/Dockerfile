@@ -5,9 +5,10 @@ RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin appu
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py .
+COPY app.py session_store.py ./
 COPY templates templates
 COPY static static
+RUN mkdir -p /sessions && chown 10001:10001 /sessions
 USER 10001
 EXPOSE 5000
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "4", "--access-logfile", "-", "app:app"]

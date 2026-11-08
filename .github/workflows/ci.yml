@@ -40,7 +40,7 @@ jobs:
       - name: Python lint and unit tests
         run: |
           pip install -r dashboard/requirements.txt -r portal/requirements.txt flake8 pytest
-          flake8 dashboard/app.py portal/app.py tests --max-line-length=100
+          flake8 dashboard/app.py dashboard/session_store.py portal/app.py portal/session_store.py tests scripts/auth-check.py --max-line-length=100
           pytest tests -q
 
       - name: Check gateway configuration (nginx syntax)
