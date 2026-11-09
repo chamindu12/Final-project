@@ -50,10 +50,28 @@ jobs:
           failure-threshold: warning
 
       - name: Python lint and unit tests
+        env:
+          COVERAGE_FILE: security-reports/coverage/.coverage
         run: |
-          pip install -r dashboard/requirements.txt -r portal/requirements.txt flake8 pytest
+          pip install -r dashboard/requirements.txt -r portal/requirements.txt flake8 pytest coverage
           flake8 dashboard/app.py dashboard/session_store.py portal/app.py portal/session_store.py tests scripts/auth-check.py --max-line-length=100
-          pytest tests -q
+          mkdir -p security-reports/coverage
+          python -m coverage run --branch --source=dashboard,portal -m pytest tests -q
+          python -m coverage report -m
+          python -m coverage json -o security-reports/coverage/coverage.json
+          python -m coverage xml -o security-reports/coverage/coverage.xml
+          python -m coverage html -d security-reports/coverage/html
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage
+          path: |
+            security-reports/coverage/coverage.json
+            security-reports/coverage/coverage.xml
+            security-reports/coverage/html/
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Check gateway configuration (nginx syntax)
         run: |
