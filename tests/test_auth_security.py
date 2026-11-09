@@ -7,7 +7,7 @@ import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from docker.errors import NotFound
@@ -34,7 +34,13 @@ def load_app(monkeypatch, root, role, db_path=None):
     spec = importlib.util.spec_from_file_location(mod_name, ROOT / folder / "app.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[mod_name] = module
-    spec.loader.exec_module(module)
+    # Resolve this app's own store even when another app was imported first.
+    store_spec = importlib.util.spec_from_file_location(
+        f"{mod_name}_store", ROOT / folder / "session_store.py")
+    store = importlib.util.module_from_spec(store_spec)
+    store_spec.loader.exec_module(store)
+    with patch.dict(sys.modules, {"session_store": store}):
+        spec.loader.exec_module(module)
     module.app.config["TESTING"] = True
     return module
 
@@ -267,8 +273,9 @@ def test_cookie_flags_and_session_store_failure(monkeypatch, tmp_path, role):
     assert client.get("/api/health").status_code == 200
 
 
-def test_concurrent_sessions_and_database_contains_no_raw_secrets(monkeypatch, tmp_path):
-    mod = load_app(monkeypatch, tmp_path, "admin")
+@pytest.mark.parametrize("role", ACCOUNTS)
+def test_concurrent_sessions_and_database_contains_no_raw_secrets(monkeypatch, tmp_path, role):
+    mod = load_app(monkeypatch, tmp_path, role)
     store = mod.auth_sessions
     with ThreadPoolExecutor(max_workers=4) as pool:
         tokens = list(pool.map(lambda _: store.create("admin", "AdminPass1", 28800), range(12)))
@@ -288,3 +295,52 @@ def test_unknown_container_cannot_trigger_control(monkeypatch, tmp_path):
     client = mod.app.test_client()
     sign_in(client, "admin")
     assert client.post("/api/containers/unknown/stop", headers=HEADERS).status_code == 404
+
+
+@pytest.mark.parametrize("role", ACCOUNTS)
+def test_app_uses_its_own_session_store(monkeypatch, tmp_path, role):
+    import inspect
+
+    mod = load_app(monkeypatch, tmp_path, role)
+    folder = "dashboard" if role == "admin" else "portal"
+    assert Path(inspect.getfile(mod.SessionStore.valid)).resolve() == (
+        ROOT / folder / "session_store.py").resolve()
+
+
+@pytest.mark.parametrize("role", ACCOUNTS)
+@pytest.mark.parametrize("operation", ["create", "revoke"])
+def test_session_write_failure_is_503(monkeypatch, tmp_path, role, operation):
+    mod = load_app(monkeypatch, tmp_path, role)
+    client = mod.app.test_client()
+    if operation == "revoke":
+        sign_in(client, role)
+        token = token_from(client.get("/"))
+        path = "/logout"
+        data = {"csrf_token": token}
+    else:
+        token = token_from(client.get("/login"))
+        user, password = ACCOUNTS[role]
+        path = "/login"
+        data = {"csrf_token": token, "username": user, "password": password}
+
+    def unavailable(*args):
+        raise sqlite3.OperationalError("test write failure")
+
+    monkeypatch.setattr(mod.auth_sessions, operation, unavailable)
+    assert client.post(path, data=data).status_code == 503
+    # Failed login must never grant access.
+    if operation == "create":
+        deny_request(client, role)
+    assert client.get("/api/health").status_code == 200
+
+
+@pytest.mark.parametrize("filename", [None, "", "../../", "   "])
+def test_invalid_upload_saves_nothing(monkeypatch, tmp_path, filename):
+    mod = load_app(monkeypatch, tmp_path, "staff")
+    client = mod.app.test_client()
+    sign_in(client, "staff")
+    data = {"csrf_token": token_from(client.get("/"))}
+    if filename is not None:
+        data["file"] = (io.BytesIO(b"invalid upload"), filename)
+    assert client.post("/files", data=data).status_code == 400
+    assert list(mod.FILES_DIR.iterdir()) == []

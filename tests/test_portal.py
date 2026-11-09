@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import uuid
+from unittest.mock import patch
 
 import pytest
 
@@ -27,7 +28,13 @@ def load(monkeypatch, role, users, data_dir, **extra):
     spec = importlib.util.spec_from_file_location(name, PORTAL_APP)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module  # Flask finds the templates folder through sys.modules
-    spec.loader.exec_module(module)
+    # Resolve this app's own store even when another app was imported first.
+    store_spec = importlib.util.spec_from_file_location(
+        f"{name}_store", os.path.join(os.path.dirname(PORTAL_APP), "session_store.py"))
+    store = importlib.util.module_from_spec(store_spec)
+    store_spec.loader.exec_module(store)
+    with patch.dict(sys.modules, {"session_store": store}):
+        spec.loader.exec_module(module)
     return module
 
 
