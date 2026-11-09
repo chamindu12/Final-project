@@ -38,7 +38,38 @@ check() { # name expected actual
   if [ "$2" = "$3" ]; then pass=$((pass+1)); printf "PASS  %-66s %s\n" "$1" "$3"
   else fail=$((fail+1)); printf "FAIL  %-66s expected=%s got=%s\n" "$1" "$2" "$3"; fi
 }
-yesno() { [ "$1" -ne 0 ] && echo yes || echo no; }   # exit status -> "failed?" yes/no
+# Only an expected probe failure may count as isolation evidence.
+probe_result() {
+  local actual=$1 expected=$2
+  if [ "$actual" -eq "$expected" ]; then echo yes
+  elif [ "$actual" -eq 0 ]; then echo no
+  else echo "ERROR(exit=$actual)"; fi
+}
+
+require_clients() {
+  local c state
+  for c in staff-client isolated-test; do
+    state=$("$DOCKER" inspect --format '{{.State.Running}}' "$c") || {
+      echo "ERROR: cannot inspect client $c" >&2; return 1;
+    }
+    [ "$state" = true ] || {
+      echo "ERROR: client $c is not running" >&2; return 1;
+    }
+    "$DOCKER" exec "$c" sh -c 'command -v curl >/dev/null && curl --version >/dev/null' || {
+      echo "ERROR: curl is unavailable in $c" >&2; return 1;
+    }
+    if [ -z "${SKIP_DNS:-}" ]; then
+      "$DOCKER" exec "$c" sh -c 'command -v dig >/dev/null && dig -v >/dev/null' || {
+        echo "ERROR: dig is unavailable in $c" >&2; return 1;
+      }
+    fi
+    if [ -z "${SKIP_ICMP:-}" ]; then
+      "$DOCKER" exec "$c" sh -c 'command -v ping >/dev/null && ping -V >/dev/null' || {
+        echo "ERROR: ping is unavailable in $c" >&2; return 1;
+      }
+    fi
+  done
+}
 
 # ---- helpers that run INSIDE a client container -----------------------------
 inc() { local c=$1; shift; "$DOCKER" exec "$c" "$@"; }
@@ -54,7 +85,16 @@ EOS
 }
 whoami_in() { inc "$1" curl -s -m 5 -b /tmp/jar "$2/api/whoami" | tr -d ' \n'; }
 json_field() { echo "$1" | grep -o "\"$2\":\"[^\"]*\"" | cut -d'"' -f4; }
-unreachable_in() { inc "$1" curl -s -o /dev/null -m 3 "$2" >/dev/null 2>&1; yesno $?; }
+unreachable_in() {
+  local status
+  inc "$1" curl -s -o /dev/null -m 3 "$2" >/dev/null 2>&1
+  status=$?
+  case "$status" in
+    7|28) echo yes ;; # Connection failure or timeout, not an HTTP error.
+    0) echo no ;;
+    *) echo "ERROR(exit=$status)" ;;
+  esac
+}
 
 # ---- helper that runs on the host (the admin's machine) ---------------------
 login_host() { # base-url user password jar
@@ -64,6 +104,9 @@ login_host() { # base-url user password jar
   curl -s -o /dev/null -m 5 -w '%{http_code}' -b "$4" -c "$4" --data-urlencode "csrf_token=$tok" \
     --data-urlencode "username=$2" --data-urlencode "password=$3" "$1/login"
 }
+
+# Abort before any policy PASS if a client or its probe tools are missing.
+require_clients || exit 2
 
 JAR=$(mktemp); trap 'rm -f "$JAR" "$JAR.2" "$JAR.3"' EXIT
 
@@ -108,9 +151,9 @@ check "staff cannot reach the guest network gateway" yes "$(unreachable_in staff
 if [ -z "${SKIP_ICMP:-}" ]; then
   if inc staff-client ping -c 1 -W 2 "$PROXY_STAFF" >/dev/null 2>&1; then
     inc staff-client ping -c 1 -W 2 "$BACKEND" >/dev/null 2>&1
-    check "staff ping to the back end fails (no route)" yes "$(yesno $?)"
+    check "staff ping to the back end gets no reply" yes "$(probe_result $? 1)"
   else
-    echo "SKIP  ping is not permitted in staff-client (set SKIP_ICMP=1 to hide this)"
+    check "staff ping probe reaches its own gateway" 0 "$?"
   fi
 fi
 
@@ -133,14 +176,14 @@ check "guest cannot reach the web server directly"  yes "$(unreachable_in isolat
 check "guest cannot reach the staff network gateway" yes "$(unreachable_in isolated-test "http://$PROXY_STAFF:$P_STAFF/login")"
 if [ -z "${SKIP_DNS:-}" ]; then
   inc isolated-test dig +short +time=2 +tries=1 @"$DNS_LAB" -p 5353 web.lab.local >/dev/null 2>&1
-  check "guest gets no answer from the internal DNS (timeout)" yes "$(yesno $?)"
+  check "guest gets no answer from the internal DNS (timeout)" yes "$(probe_result $? 9)"
 fi
 if [ -z "${SKIP_ICMP:-}" ]; then
   if inc isolated-test ping -c 1 -W 2 "$PROXY_GUEST" >/dev/null 2>&1; then
     inc isolated-test ping -c 1 -W 2 "$BACKEND" >/dev/null 2>&1
-    check "guest ping to the back end fails (no route)" yes "$(yesno $?)"
+    check "guest ping to the back end gets no reply" yes "$(probe_result $? 1)"
   else
-    echo "SKIP  ping is not permitted in isolated-test (set SKIP_ICMP=1 to hide this)"
+    check "guest ping probe reaches its own gateway" 0 "$?"
   fi
 fi
 sleep 1
