@@ -1,4 +1,8 @@
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-trixie
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin appuser

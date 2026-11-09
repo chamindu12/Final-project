@@ -34,7 +34,8 @@ volumes:
 
 services:
   nginx-web:
-    image: nginxinc/nginx-unprivileged:1.27-alpine
+    build: ./services/reverse-proxy
+    image: netlab/nginx:1.30.6-secure
     container_name: nginx-web
     restart: unless-stopped
     networks:
@@ -193,7 +194,8 @@ services:
   # cannot follow the same hardening as the other services (accepted risk: it is
   # never published to the host and its mounts are read-only).
   cadvisor:
-    image: ghcr.io/google/cadvisor:0.55.1
+    build: ./services/cadvisor
+    image: netlab/cadvisor:0.60.6-secure
     container_name: cadvisor
     restart: unless-stopped
     command:
@@ -222,7 +224,7 @@ services:
       start_period: 15s
 
   prometheus:
-    image: prom/prometheus:v3.13.2
+    image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
     container_name: prometheus
     restart: unless-stopped
     depends_on:
@@ -257,7 +259,7 @@ services:
       start_period: 15s
 
   grafana:
-    image: grafana/grafana:12.4.4
+    image: grafana/grafana:12.4.14@sha256:ae509d9ae8c1021ca32ec370a9ca975d40165eda9fccd1e1102d317ff8787cd7
     container_name: grafana
     restart: unless-stopped
     depends_on:
@@ -297,7 +299,8 @@ services:
       start_period: 30s
 
   nginx-proxy:
-    image: nginxinc/nginx-unprivileged:1.27-alpine
+    build: ./services/reverse-proxy
+    image: netlab/nginx:1.30.6-secure
     container_name: nginx-proxy
     restart: unless-stopped
     depends_on:
