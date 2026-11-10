@@ -202,7 +202,7 @@ services:
       - --docker_only=true
       - --housekeeping_interval=15s
       - --store_container_labels=false
-      - --whitelisted_container_labels=com.docker.compose.service
+      - --whitelisted_container_labels=com.docker.compose.service,com.docker.compose.project
     networks:
       lab_net:
         ipv4_address: 172.20.0.31

@@ -470,7 +470,14 @@ def metrics_history():
 
     container = get_container(name)
     service = container.labels.get("com.docker.compose.service", container.name)
-    matcher = f'container_label_com_docker_compose_service={json.dumps(service)}'
+    # Scope every query to this exporter, project and resolved container name.
+    # Service alone is shared by other Compose projects and service replicas.
+    matcher = ",".join((
+        'job="cadvisor"',
+        f'container_label_com_docker_compose_project={json.dumps(PROJECT)}',
+        f'container_label_com_docker_compose_service={json.dumps(service)}',
+        f'name={json.dumps(container.name)}',
+    ))
     queries = {
         "cpu": f'sum by (name) (rate(container_cpu_usage_seconds_total{{{matcher}}}[1m])) * 100',
         "mem": (
