@@ -19,6 +19,7 @@
 
 <div class="card">
   <h2>Shared files</h2>
+  <p class="muted">Existing files are never replaced. If a filename already exists, rename your file before uploading.</p>
   <form method="post" action="/files" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="file">Upload a file (up to {{ max_upload }} MB)</label>

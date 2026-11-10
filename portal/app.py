@@ -288,7 +288,17 @@ if CAN_WRITE:
         name = secure_filename(uploaded.filename) if uploaded and uploaded.filename else ""
         if not name:
             abort(400, "Choose a file with a normal name.")
-        uploaded.save(FILES_DIR / name)
+        # Stage outside the shared directory so incomplete uploads are not visible.
+        # Hard-link publication is atomic and never replaces an existing name,
+        # including when another worker uploads the same filename concurrently.
+        with tempfile.TemporaryDirectory(prefix=".upload-", dir=DATA_DIR) as directory:
+            staged = Path(directory) / "content"
+            uploaded.save(staged)
+            try:
+                os.link(staged, FILES_DIR / name)
+            except FileExistsError:
+                abort(409, "A file with this name already exists. Existing file was kept. "
+                           "Rename your file and try again.")
         return redirect(url_for("home"))
 
     @app.get("/files/<name>")
