@@ -393,3 +393,59 @@ def test_dashboard_refuses_to_start_without_secret_or_admin(monkeypatch):
         load_dashboard(monkeypatch, PORTAL_SECRET_KEY="short")
     with pytest.raises(RuntimeError):
         load_dashboard(monkeypatch, PORTAL_SECRET_KEY="test-secret-key-0123456789", ADMIN_USERS="")
+
+
+@pytest.mark.parametrize("project,service,name", [
+    ("netlab", "nginx-web", "nginx-web"),
+    ("another-project", "web", "custom-web-2"),
+    ('lab"\\name', 'web"\\service', 'container"\\name'),
+])
+def test_history_queries_scope_project_exporter_and_resolved_name(
+        client, monkeypatch, project, service, name):
+    monkeypatch.setattr(dash, "PROJECT", project)
+    container = fake(name, project=project)
+    container.labels["com.docker.compose.service"] = service
+    dash._client.containers.get.side_effect = None
+    dash._client.containers.get.return_value = container
+    queries = []
+
+    def ranges(query, start, end):
+        queries.append(query)
+        return {}
+
+    with patch.object(dash, "_prometheus_range_values", ranges):
+        response = client[0].get("/api/metrics/history?name=container-id")
+    assert response.status_code == 200
+    assert response.json["name"] == name
+    assert len(queries) == 4
+    for query in queries:
+        assert 'job="cadvisor"' in query
+        for label, value in (
+            ("container_label_com_docker_compose_project", project),
+            ("container_label_com_docker_compose_service", service),
+            ("name", name),
+        ):
+            assert f"{label}={json.dumps(value)}" in query
+    # Memory has two vector selectors; both must carry all restrictions.
+    memory = next(q for q in queries if "container_memory_working_set_bytes" in q)
+    assert memory.count(
+        f"container_label_com_docker_compose_project={json.dumps(project)}") == 2
+
+
+def test_history_rejects_foreign_container_before_querying(client):
+    dash._client.containers.get.side_effect = None
+    dash._client.containers.get.return_value = fake("foreign", project="other-project")
+    with patch.object(dash, "_prometheus_range_values") as ranges:
+        response = client[0].get("/api/metrics/history?name=foreign-id")
+    assert response.status_code == 404
+    ranges.assert_not_called()
+
+
+def test_cadvisor_exports_project_and_service_labels():
+    from pathlib import Path
+
+    compose = (Path(__file__).resolve().parents[1] / "docker-compose.yml").read_text()
+    assert (
+        "--whitelisted_container_labels="
+        "com.docker.compose.service,com.docker.compose.project"
+    ) in compose

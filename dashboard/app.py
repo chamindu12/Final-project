@@ -10,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from urllib.error import URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit
 from urllib.request import urlopen
 
 import docker
@@ -22,6 +22,16 @@ from session_store import SessionStore
 app = Flask(__name__)
 
 PROJECT = os.environ.get("COMPOSE_PROJECT", "netlab")
+try:
+    PORTAL_PORTS = {
+        "staff": int(os.environ.get("STAFF_PORT", "8081")),
+        "guest": int(os.environ.get("GUEST_PORT", "8082")),
+    }
+except ValueError as exc:
+    raise RuntimeError("STAFF_PORT and GUEST_PORT must be valid port numbers") from exc
+if any(not 1 <= port <= 65535 for port in PORTAL_PORTS.values()):
+    raise RuntimeError("STAFF_PORT and GUEST_PORT must be between 1 and 65535")
+
 PROTECTED = {"dashboard"}  # the dashboard must not stop or restart itself
 MAX_LOG_LINES = 500
 MB = 1024 * 1024
@@ -78,7 +88,8 @@ auth_sessions = SessionStore(
     app.config["SECRET_KEY"], "admin",
 )
 
-OPEN_PATHS = {"/api/health", "/login"}  # everything else needs an admin session
+# Everything else needs an admin session (apart from static assets).
+OPEN_PATHS = {"/api/health", "/login", "/portal/staff", "/portal/guest"}
 
 _client = None
 
@@ -351,6 +362,19 @@ def api_index():
     })
 
 
+@app.get("/portal/<role>")
+def portal_sign_in(role):
+    # These public links lead to portals that enforce their own login and zone policy.
+    port = PORTAL_PORTS.get(role)
+    if port is None:
+        return jsonify({"error": "unknown portal"}), 404
+    hostname = urlsplit(request.host_url).hostname
+    if ":" in hostname:
+        hostname = f"[{hostname}]"
+    target = urlunsplit((request.scheme, f"{hostname}:{port}", "/", "", ""))
+    return redirect(target)
+
+
 @app.get("/api/health")
 def health():
     return jsonify({"status": "ok"})
@@ -470,7 +494,14 @@ def metrics_history():
 
     container = get_container(name)
     service = container.labels.get("com.docker.compose.service", container.name)
-    matcher = f'container_label_com_docker_compose_service={json.dumps(service)}'
+    # Scope every query to this exporter, project and resolved container name.
+    # Service alone is shared by other Compose projects and service replicas.
+    matcher = ",".join((
+        'job="cadvisor"',
+        f'container_label_com_docker_compose_project={json.dumps(PROJECT)}',
+        f'container_label_com_docker_compose_service={json.dumps(service)}',
+        f'name={json.dumps(container.name)}',
+    ))
     queries = {
         "cpu": f'sum by (name) (rate(container_cpu_usage_seconds_total{{{matcher}}}[1m])) * 100',
         "mem": (

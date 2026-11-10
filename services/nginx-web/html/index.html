@@ -48,7 +48,7 @@
         <li>Shared files: upload and download</li>
         <li>Network speed test up to 50 MB</li>
       </ul>
-      <a href="http://localhost:8081/" data-port="8081">Staff sign in</a>
+      <a href="/portal/staff">Staff sign in</a>
     </section>
     <section class="card guest">
       <h2>Guest</h2>
@@ -58,7 +58,7 @@
         <li>Visitor guide</li>
         <li>Small speed test up to 1 MB</li>
       </ul>
-      <a href="http://localhost:8082/" data-port="8082">Guest sign in</a>
+      <a href="/portal/guest">Guest sign in</a>
     </section>
   </div>
   <div class="note">
@@ -67,11 +67,5 @@
   </div>
 </main>
 <footer>NetLab &middot; containerised network services</footer>
-<script>
-  // Point the staff and guest buttons at this same machine, whatever name it was opened with.
-  document.querySelectorAll("[data-port]").forEach(function (a) {
-    a.href = location.protocol + "//" + location.hostname + ":" + a.dataset.port + "/";
-  });
-</script>
 </body>
 </html>
