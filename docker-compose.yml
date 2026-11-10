@@ -102,6 +102,8 @@ services:
       - admin_sessions:/sessions
     environment:
       COMPOSE_PROJECT: netlab
+      STAFF_PORT: ${STAFF_PORT:-8081}
+      GUEST_PORT: ${GUEST_PORT:-8082}
       ADMIN_USERS: ${ADMIN_USERS:?Set ADMIN_USERS in .env (name:password)}
       SESSION_DB_PATH: /sessions/sessions.sqlite3
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-28800}
