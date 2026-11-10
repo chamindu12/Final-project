@@ -17,9 +17,18 @@ import docker
 from docker.errors import DockerException, NotFound
 from flask import Flask, jsonify, redirect, render_template, request, session
 
+from werkzeug.middleware.proxy_fix import ProxyFix
+
 from session_store import SessionStore
 
+SECURE_COOKIES = os.environ.get("SESSION_COOKIE_SECURE", "0")
+if SECURE_COOKIES not in ("0", "1"):
+    raise RuntimeError("SESSION_COOKIE_SECURE must be 0 or 1")
+
 app = Flask(__name__)
+if SECURE_COOKIES == "1":
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app, x_for=0, x_proto=1, x_host=0, x_port=0, x_prefix=0)
 
 PROJECT = os.environ.get("COMPOSE_PROJECT", "netlab")
 try:
@@ -76,6 +85,7 @@ app.config.update(
     SECRET_KEY=hashlib.sha256(f"{SECRET}:admin".encode()).hexdigest(),
     SESSION_COOKIE_NAME="admin_session",
     SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=SECURE_COOKIES == "1",
     SESSION_COOKIE_SAMESITE="Lax",
     PERMANENT_SESSION_LIFETIME=timedelta(seconds=SESSION_TTL_SECONDS),
     SESSION_REFRESH_EACH_REQUEST=False,

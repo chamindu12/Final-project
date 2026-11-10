@@ -1,0 +1,30 @@
+# Usage: docker compose -f docker-compose.yml -f docker-compose.https.yml ...
+# Requires Compose >= 2.24.4 for !override (do not append HTTP port bindings).
+services:
+  dashboard:
+    environment:
+      SESSION_COOKIE_SECURE: "1"
+      STAFF_PORT: ${HTTPS_STAFF_PORT:-8444}
+      GUEST_PORT: ${HTTPS_GUEST_PORT:-8445}
+
+  staff-portal:
+    environment:
+      SESSION_COOKIE_SECURE: "1"
+
+  guest-portal:
+    environment:
+      SESSION_COOKIE_SECURE: "1"
+
+  nginx-proxy:
+    group_add:
+      - "${TLS_CERT_GID:?Set TLS_CERT_GID to your host primary group ID}"
+    ports: !override
+      - "127.0.0.1:${HTTPS_ADMIN_PORT:-8443}:8080"
+      - "127.0.0.1:${HTTPS_STAFF_PORT:-8444}:8081"
+      - "127.0.0.1:${HTTPS_GUEST_PORT:-8445}:8082"
+    volumes:
+      - ./services/reverse-proxy/https.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${TLS_CERT_DIR:?Set TLS_CERT_DIR to your certificate directory}:/etc/netlab-tls:ro
+    healthcheck:
+      # Local liveness only; externally validate identity with curl --cacert.
+      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://127.0.0.1:8080/healthz >/dev/null || exit 1"]
