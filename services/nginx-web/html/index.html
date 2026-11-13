@@ -3,69 +3,72 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NetLab Network Services</title>
-<style>
-  * { box-sizing: border-box; }
-  body { margin: 0; background: #f3f5f9; color: #0f172a; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
-  header { background: #0b1220; color: #fff; padding: 36px 24px; text-align: center; }
-  header h1 { margin: 0 0 6px; font-size: 26px; }
-  header p { margin: 0; color: #94a3b8; }
-  main { max-width: 980px; margin: 28px auto; padding: 0 16px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
-  .card { background: #fff; border: 1px solid #e5e9f0; border-top: 5px solid var(--c); border-radius: 12px; padding: 22px; display: flex; flex-direction: column; }
-  .card h2 { margin: 0 0 6px; font-size: 18px; }
-  .card p { margin: 0 0 10px; color: #475569; }
-  .card ul { margin: 0 0 16px; padding-left: 18px; color: #334155; flex: 1; }
-  .card a { background: var(--c); color: #fff; text-decoration: none; text-align: center; padding: 10px 14px; border-radius: 8px; font-weight: 600; }
-  .admin { --c: #2563eb; } .staff { --c: #0f766e; } .guest { --c: #b45309; }
-  .note { margin-top: 22px; background: #fff; border: 1px solid #e5e9f0; border-radius: 12px; padding: 16px 20px; color: #475569; font-size: 14px; }
-  footer { text-align: center; color: #94a3b8; font-size: 13px; padding: 18px; }
-</style>
+<meta name="description" content="Sign in to NetLab administration, staff workspace or guest access.">
+<title>Welcome | NetLab Network Services</title>
+<link rel="stylesheet" href="/web/assets/netlab.css">
 </head>
 <body>
-<header>
-  <h1>NetLab Network Services</h1>
-  <p>Choose how you are signing in. Each role has its own sign-in and its own tools.</p>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="site-header-inner">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">N</span><span>NetLab<small>NETWORK SERVICES</small></span></a>
+    <a class="header-link" href="#access-help"><svg class="icon " viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 .5c0 2-2.5 2-2.5 4M12 17h.01"/></svg> Access help</a>
+  </div>
 </header>
-<main>
-  <div class="grid">
-    <section class="card admin">
-      <h2>Admin</h2>
-      <p>Run and watch the platform.</p>
-      <ul>
-        <li>Container status and health</li>
-        <li>Live CPU, memory and network</li>
-        <li>Logs, including who used which portal</li>
-        <li>Start, stop and restart services</li>
+<main class="landing-main" id="main">
+  <section class="landing-hero" aria-labelledby="welcome-title">
+    <div>
+      <p class="eyebrow">Your network. One starting point.</p>
+      <h1 id="welcome-title">Welcome to<br>your NetLab workspace.</h1>
+      <p>Choose your access area to get started. Each workspace brings together the tools and information available to your role.</p>
+    </div>
+    <div class="hero-note">
+      <h2>Built around your role</h2>
+      <p>Administration, staff collaboration and visitor information have separate sign-ins. Use the account provided for your access area.</p>
+    </div>
+  </section>
+  <div class="section-heading"><h2 id="workspaces-title">Choose your workspace</h2><span class="section-label">Three access areas</span></div>
+  <section class="role-grid" aria-labelledby="workspaces-title">
+    <section class="card role-card admin" aria-labelledby="admin-title">
+      <div class="role-card-top"><span class="icon-tile"><svg class="icon icon-lg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3 4 6v6c0 4 4 7 8 9 4-2 8-5 8-9V6Z"/><path d="m8 12 3 3 5-6"/></svg></span><span class="role-number">01</span></div>
+      <h2 id="admin-title">Administrator</h2>
+      <p>Manage the services behind your workspace.</p>
+      <ul class="feature-list">
+        <li><svg class="icon " viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12 4 4L19 6"/></svg><span>Container status and resource charts</span></li>
+        <li><svg class="icon " viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12 4 4L19 6"/></svg><span>Service controls and recent logs</span></li>
+        <li><svg class="icon " viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12 4 4L19 6"/></svg><span>Administration accounts only</span></li>
       </ul>
-      <a href="/dashboard/">Admin sign in</a>
+      <a class="button button-wide" href="/dashboard/">Admin sign in</a>
     </section>
-    <section class="card staff">
-      <h2>Staff</h2>
-      <p>Internal work area for staff.</p>
-      <ul>
-        <li>Notice board</li>
-        <li>Shared files: upload and download</li>
-        <li>Network speed test up to 50 MB</li>
+    <section class="card role-card staff" aria-labelledby="staff-title">
+      <div class="role-card-top"><span class="icon-tile"><svg class="icon icon-lg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="9" cy="8" r="3"/><path d="M3 21v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6M17 15a5 5 0 0 1 4 5v1"/></svg></span><span class="role-number">02</span></div>
+      <h2 id="staff-title">Staff workspace</h2>
+      <p>Your shared files, updates and everyday tools.</p>
+      <ul class="feature-list">
+        <li><svg class="icon " viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12 4 4L19 6"/></svg><span>Staff notices and shared files</span></li>
+        <li><svg class="icon " viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12 4 4L19 6"/></svg><span>Upload and download documents</span></li>
+        <li><svg class="icon " viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12 4 4L19 6"/></svg><span>Staff accounts only</span></li>
       </ul>
-      <a href="/portal/staff">Staff sign in</a>
+      <a class="button button-wide" href="/portal/staff">Staff sign in</a>
     </section>
-    <section class="card guest">
-      <h2>Guest</h2>
-      <p>Limited access for visitors.</p>
-      <ul>
-        <li>Announcements</li>
-        <li>Visitor guide</li>
-        <li>Small speed test up to 1 MB</li>
+    <section class="card role-card guest" aria-labelledby="guest-title">
+      <div class="role-card-top"><span class="icon-tile"><svg class="icon icon-lg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="m16 8-2.5 5.5L8 16l2.5-5.5Z"/></svg></span><span class="role-number">03</span></div>
+      <h2 id="guest-title">Guest access</h2>
+      <p>Useful information for your visit.</p>
+      <ul class="feature-list">
+        <li><svg class="icon " viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12 4 4L19 6"/></svg><span>Visitor announcements and guide</span></li>
+        <li><svg class="icon " viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12 4 4L19 6"/></svg><span>Small connection test download</span></li>
+        <li><svg class="icon " viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12 4 4L19 6"/></svg><span>Visitor accounts only</span></li>
       </ul>
-      <a href="/portal/guest">Guest sign in</a>
+      <a class="button button-wide" href="/portal/guest">Guest sign in</a>
     </section>
-  </div>
-  <div class="note">
-    Staff, guest and admin accounts are separate: a staff account does not work on the guest portal or the dashboard.
-    Which sign-in pages you can open also depends on the network you are connected to.
-  </div>
+  </section>
+  <details class="access-help" id="access-help">
+    <summary>Need help choosing an access area?</summary>
+    <p>Staff, guest and admin accounts are separate. A staff account does not work on the guest portal or the dashboard. Which sign-in pages you can open also depends on the network you are connected to.</p>
+    <p>If access is denied, check that you are using the correct account and network. Contact your NetLab administrator if you need help. No self-service password reset is available.</p>
+  </details>
 </main>
-<footer>NetLab &middot; containerised network services</footer>
+<footer class="site-footer"><span>NetLab &middot; Network services laboratory</span><span>Role-based access &middot; Shared services</span></footer>
 </body>
 </html>

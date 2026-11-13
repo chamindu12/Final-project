@@ -1,53 +1,76 @@
 {% extends "base.html" %}
-{% block title %}Home{% endblock %}
+{% block title %}{{ 'Workspace' if can_write else 'Welcome' }}{% endblock %}
 {% block content %}
+<section class="page-heading" id="overview" aria-labelledby="page-title">
+  <div><p class="eyebrow">{{ 'Staff workspace' if can_write else 'Welcome to NetLab' }}</p><h1 id="page-title">{{ 'Your work, in one place.' if can_write else 'Make yourself at home.' }}</h1><p>{{ 'Read the latest notices, share a file and stay connected.' if can_write else 'Visitor information and useful tools for your connection.' }}</p></div>
+  <span class="badge{{ '' if secure_transport else ' badge-neutral' }}">{{ icon('lock' if secure_transport else 'info') }} {{ 'HTTPS connection' if secure_transport else 'HTTP connection' }}</span>
+</section>
 {% if can_write %}
-<div class="card">
-  <h2>Notice board</h2>
-  <form method="post" action="/notes">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label for="text">Post a note for other staff</label>
-    <textarea id="text" name="text" rows="2" maxlength="300" required></textarea>
-    <p><button type="submit">Post note</button></p>
-  </form>
-  {% if notes %}
-  <ul class="plain">
-    {% for n in notes %}<li><strong>{{ n.user }}</strong> <span class="muted">{{ n.time }} UTC</span><br>{{ n.text }}</li>{% endfor %}
-  </ul>
-  {% else %}<p class="muted">No notes yet.</p>{% endif %}
+<div class="stats-grid" role="group" aria-label="Workspace summary">
+  <div class="stat"><span class="stat-label">Shared files {{ icon('folder') }}</span><strong>{{ files|length }}</strong><small>Available to staff</small></div>
+  <div class="stat"><span class="stat-label">Notice board {{ icon('note') }}</span><strong>{{ notes|length }}</strong><small>Current notices</small></div>
+  <div class="stat"><span class="stat-label">Upload request limit {{ icon('upload') }}</span><strong>{{ max_upload }} <span class="small">MiB</span></strong><small>Including form data</small></div>
 </div>
-
-<div class="card">
-  <h2>Shared files</h2>
-  <p class="muted">Existing files are never replaced. If a filename already exists, rename your file before uploading.</p>
-  <form method="post" action="/files" enctype="multipart/form-data">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label for="file">Upload a file (up to {{ max_upload }} MB)</label>
-    <input type="file" id="file" name="file" required>
-    <p><button type="submit">Upload</button></p>
-  </form>
-  {% if files %}
-  <table>
-    <tr><th>File</th><th>Size</th></tr>
-    {% for f in files %}<tr><td><a href="/files/{{ f.name|urlencode }}">{{ f.name }}</a></td><td>{{ f.kb }} KB</td></tr>{% endfor %}
-  </table>
-  {% else %}<p class="muted">No files yet.</p>{% endif %}
+<div class="workspace-grid">
+  <section class="card" id="notices" aria-labelledby="notices-title">
+    <div class="section-heading"><div><h2 id="notices-title">Notice board</h2><p class="muted small">Keep everyone on the same page.</p></div><span class="badge badge-neutral">Staff</span></div>
+    {% for category, message in feedback if category in ['note-success', 'note-error'] %}
+    <div class="message{{ ' message-error' if category == 'note-error' else '' }}" role="{{ 'alert' if category == 'note-error' else 'status' }}">{{ icon('info' if category == 'note-error' else 'check') }}<p>{{ message }}</p></div>
+    {% endfor %}
+    <form class="notice-composer" method="post" action="{{ url_for('add_note') }}" data-submit-form>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field"><label for="text">Share an update</label><textarea id="text" name="text" rows="3" maxlength="300" required placeholder="What should your colleagues know?" aria-describedby="note-help note-count" data-note-input></textarea><p class="help-text" id="note-help">Visible to everyone with staff access.</p></div>
+      <div class="form-bottom"><span class="counter" id="note-count" data-note-count>0 / 300 characters</span><button class="button" type="submit" data-busy-label="Posting…">Post note {{ icon('arrow') }}</button></div>
+    </form>
+    {% if notes %}
+    <ul class="notice-list" aria-label="Staff notices">
+      {% for n in notes %}<li class="notice"><div class="notice-meta"><strong>{{ n.user }}</strong><time datetime="{{ n.time|replace(' ', 'T') }}Z" data-local-time title="{{ n.time }} UTC">{{ n.time }} UTC</time></div><p>{{ n.text }}</p></li>{% endfor %}
+    </ul>
+    {% else %}<div class="empty-state">{{ icon('note') }}<h3>A fresh notice board</h3><p>Post the first update to keep your colleagues informed.</p></div>{% endif %}
+  </section>
+  <section class="card" id="files" aria-labelledby="files-title">
+    <div class="section-heading"><div><h2 id="files-title">Shared files</h2><p class="muted small">Documents for your team.</p></div><span class="badge badge-neutral">{{ files|length }} {{ 'file' if files|length == 1 else 'files' }}</span></div>
+    {% for category, message in feedback if category == 'upload-success' %}
+    <div class="message" role="status">{{ icon('check') }}<p>{{ message }}</p></div>
+    {% endfor %}
+    <form class="upload-zone" method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" data-upload-form data-max-bytes="{{ max_upload * 1024 * 1024 }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field"><label for="file">Choose a file to share</label><input type="file" id="file" name="file" required aria-describedby="upload-help file-selection"><p class="help-text" id="upload-help">Request limit: {{ max_upload }} MiB, including form data. Existing files are never replaced. Rename a file if its name is already in use.</p><p class="help-text" id="file-selection" data-file-selection>No file selected.</p></div>
+      <button class="button" type="submit">{{ icon('upload') }} Upload file</button>
+      <progress class="upload-progress" max="100" value="0" aria-label="Upload transfer progress" data-upload-progress hidden></progress>
+      <p class="upload-feedback" role="status" aria-live="polite" data-upload-feedback hidden></p>
+      <a class="small" href="{{ url_for('login') }}" data-upload-signin hidden>Sign in again</a>
+      <a class="small" href="{{ url_for('home') }}" data-upload-reload hidden>Reload portal</a>
+    </form>
+    {% if files %}
+    <div class="file-toolbar" data-file-tools hidden>
+      <div class="file-search"><label for="file-search">Find a file</label><input id="file-search" type="search" placeholder="Search filenames…" aria-controls="file-table" data-file-search></div>
+      <div class="file-sort"><label for="file-sort">Sort by</label><select id="file-sort" data-file-sort><option value="name">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="size">Smallest first</option><option value="size-desc">Largest first</option><option value="recent">Recently modified</option></select></div>
+    </div>
+    <p class="file-results" role="status" aria-live="polite" data-file-results hidden></p>
+    <div class="table-wrap" role="region" aria-label="Shared files table" tabindex="0"><table id="file-table"><caption class="sr-only">Files shared with staff. Modification times come from stored file metadata.</caption><thead><tr><th scope="col">File</th><th scope="col">Size</th><th scope="col"><span class="sr-only">Action</span></th></tr></thead><tbody data-file-list>
+      {% for f in files %}<tr data-file-name="{{ f.name }}" data-file-bytes="{{ f.bytes }}" data-file-modified="{{ f.modified }}"><td class="file-name">{{ f.name }}<time class="file-date" datetime="{{ f.modified }}" data-local-time title="{{ f.modified }}">{{ f.modified }} UTC</time></td><td class="file-size">{{ f.kb }} KiB</td><td><a class="button button-secondary button-small" href="{{ url_for('download', name=f.name) }}" aria-label="Download {{ f.name }}">{{ icon('download') }} Download</a></td></tr>{% endfor %}
+    </tbody></table></div>
+    <div class="empty-state" data-file-empty hidden>{{ icon('folder') }}<h3>No matching files</h3><p>Try another filename or clear your search.</p><button class="button button-secondary button-small" type="button" data-file-clear>Clear search</button></div>
+    {% else %}<div class="empty-state">{{ icon('folder') }}<h3>No shared files yet</h3><p>Upload your first document using the form above.</p></div>{% endif %}
+  </section>
 </div>
 {% else %}
-<div class="card">
-  <h2>Announcements</h2>
-  <ul class="plain">{% for a in announcements %}<li>{{ a }}</li>{% endfor %}</ul>
-  <p><a class="btn" href="/guide.txt">Download visitor guide</a></p>
+<nav class="guest-nav" aria-label="Guest navigation"><a href="#announcements" aria-current="location">Announcements</a><a href="#guide">Visitor guide</a><a href="#connection">Connection test</a></nav>
+<div class="guest-grid">
+  <section class="card" id="announcements" aria-labelledby="announcements-title">
+    <div class="section-heading"><div><h2 id="announcements-title">Announcements</h2><p class="muted small">Good to know while you are here.</p></div><span class="badge">Visitor information</span></div>
+    {% for a in announcements %}<div class="announcement"><span class="announcement-index" aria-hidden="true">{{ '%02d'|format(loop.index) }}</span><p>{{ a }}</p></div>{% else %}<div class="empty-state"><h3>You are all caught up</h3><p>No visitor announcements at the moment.</p></div>{% endfor %}
+  </section>
+  <section class="card guide-card" id="guide" aria-labelledby="guide-title"><span class="icon-tile">{{ icon('compass', 'icon-lg') }}</span><p class="eyebrow">Your visit, made easier</p><h2 id="guide-title">A handy visitor guide</h2><p>Keep a copy of the network access information and available services.</p><p class="small muted">Text document &middot; available to signed-in visitors</p><a class="button" href="{{ url_for('guide') }}">{{ icon('download') }} Download visitor guide</a></section>
 </div>
 {% endif %}
-
-<div class="card">
-  <h2>Network speed test</h2>
-  <p class="muted">Downloads test data through the gateway, so the traffic shows up in the dashboard and Grafana. The {{ role }} portal allows up to {{ speedtest_max }} MB.</p>
-  <div class="row">
-    <a class="btn" href="/speedtest?mb=1">1 MB</a>
-    {% if speedtest_max >= 10 %}<a class="btn" href="/speedtest?mb=10">10 MB</a>{% endif %}
-    {% if speedtest_max >= 50 %}<a class="btn" href="/speedtest?mb=50">50 MB</a>{% endif %}
+<section class="card connection-card" id="connection" aria-labelledby="connection-title">
+  <div class="connection-copy"><h2 id="connection-title">Connection test download</h2><p>Download a test file through the NetLab gateway. This generates measurable traffic; it does not measure your internet speed. Your portal allows up to {{ speedtest_max }} MiB per download.</p><p class="help-text" role="status" data-download-status hidden></p></div>
+  <div class="connection-actions" role="group" aria-label="Test file sizes">
+    <a class="button button-secondary" href="{{ url_for('speedtest', mb=1) }}" data-test-download>Download 1 MiB</a>
+    {% if speedtest_max >= 10 %}<a class="button button-secondary" href="{{ url_for('speedtest', mb=10) }}" data-test-download>10 MiB</a>{% endif %}
+    {% if speedtest_max >= 50 %}<a class="button button-secondary" href="{{ url_for('speedtest', mb=50) }}" data-test-download>50 MiB</a>{% endif %}
   </div>
-</div>
+</section>
 {% endblock %}

@@ -16,8 +16,9 @@ from datetime import datetime, timezone
 from datetime import timedelta
 from pathlib import Path
 
-from flask import (Flask, Response, abort, jsonify, redirect, render_template,
+from flask import (Flask, Response, abort, flash, jsonify, redirect, render_template,
                    request, send_from_directory, session, stream_with_context, url_for)
+from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
@@ -63,7 +64,7 @@ VISITOR_GUIDE = (
     "NetLab visitor guide\n"
     "====================\n"
     "1. You are on the guest network (isolated_net).\n"
-    "2. Guests can read announcements and run a small speed test.\n"
+    "2. Guests can read announcements and download a small connection test file.\n"
     "3. Internal services, file sharing and management tools are staff/admin only.\n"
 )
 
@@ -145,7 +146,8 @@ def login_required(view):
 
 @app.context_processor
 def inject_globals():
-    return {"csrf_token": csrf_token, "role": ROLE, "client": client_info()}
+    return {"csrf_token": csrf_token, "role": ROLE, "client": client_info(),
+            "secure_transport": request.is_secure}
 
 
 def load_notes():
@@ -165,7 +167,11 @@ def list_files():
     out = []
     for p in sorted(FILES_DIR.iterdir()) if FILES_DIR.exists() else []:
         if p.is_file():
-            out.append({"name": p.name, "kb": round(p.stat().st_size / 1024, 1)})
+            stat = p.stat()
+            out.append({"name": p.name, "kb": round(stat.st_size / 1024, 1),
+                        "bytes": stat.st_size,
+                        "modified": datetime.fromtimestamp(
+                            stat.st_mtime, timezone.utc).isoformat(timespec="seconds")})
     return out
 
 
@@ -190,11 +196,39 @@ def secure_headers(resp):
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "no-referrer"
     resp.headers["Content-Security-Policy"] = (
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+        "default-src 'none'; style-src 'self'; script-src 'self'; "
+        "connect-src 'self'; img-src 'self'; form-action 'self'; "
         "base-uri 'none'; frame-ancestors 'none'"
     )
     resp.headers.setdefault("Cache-Control", "no-store")
     return resp
+
+
+# Preserve HTTP status codes; enhance browser errors without changing API contracts.
+@app.errorhandler(500)
+@app.errorhandler(HTTPException)
+def request_error(error):
+    code = error.code or 500
+    description = error.description
+    if (request.path.startswith("/api/")
+            or request.accept_mimetypes.best_match(
+                ["text/html", "application/json"]) == "application/json"):
+        return jsonify({"error": description}), code
+    titles = {400: "Please check your request", 401: "Please sign in again",
+              403: "This action is not available", 404: "Page not found",
+              409: "A file with this name already exists", 413: "The upload is too large",
+              429: "Please wait before trying again"}
+    hints = {400: "Reload the form and try again.",
+             401: "Your session may have expired. Sign in before continuing.",
+             403: "Check your account and network access.",
+             404: "The page or file may not be available in this portal.",
+             409: "Your existing file is safe. Rename the new file before uploading.",
+             413: f"The request limit is {MAX_UPLOAD_MB} MiB, including form data.",
+             429: "Wait a moment, then retry. No automatic retry has been made."}
+    return render_template(
+        "error.html", error_code=code, error_title=titles.get(code, error.name),
+        error_message=description, error_hint=hints.get(code, "Please try again later."),
+        user=None), code
 
 
 # ---------- pages ----------
@@ -247,6 +281,11 @@ def home():
     return render_template("home.html", **ctx)
 
 
+@app.get("/help")
+def help_page():
+    return render_template("help.html", user=None)
+
+
 @app.get("/api/whoami")
 @login_required
 def whoami():
@@ -258,7 +297,7 @@ def whoami():
 @app.get("/speedtest")
 @login_required
 def speedtest():
-    """Stream N megabytes: generates measurable traffic. The limit depends on the role."""
+    """Stream N mebibytes of test traffic. This does not calculate internet speed."""
     try:
         mb = int(request.args.get("mb", "1"))
     except ValueError:
@@ -288,7 +327,10 @@ if CAN_WRITE:
                 notes.append({"user": current_user(), "text": text,
                               "time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")})
                 save_notes(notes)
-        return redirect(url_for("home"))
+            flash("Your note was posted to the staff notice board.", "note-success")
+        else:
+            flash("Write a note before posting.", "note-error")
+        return redirect(url_for("home", _anchor="notices"))
 
     @app.post("/files")
     @login_required
@@ -308,7 +350,11 @@ if CAN_WRITE:
             except FileExistsError:
                 abort(409, "A file with this name already exists. Existing file was kept. "
                            "Rename your file and try again.")
-        return redirect(url_for("home"))
+        flash("Your file was uploaded. The shared file list has been updated.", "upload-success")
+        if request.accept_mimetypes.best_match(
+                ["text/html", "application/json"]) == "application/json":
+            return jsonify({"message": "File uploaded.", "redirect": "/#files"}), 201
+        return redirect(url_for("home", _anchor="files"))
 
     @app.get("/files/<name>")
     @login_required

@@ -77,6 +77,7 @@ jobs:
         run: |
           docker build -t netlab/nginx:1.30.6-secure services/reverse-proxy
           docker run --rm -v "$PWD/services/reverse-proxy/default.conf:/etc/nginx/conf.d/default.conf:ro" \
+            -v "$PWD/services/reverse-proxy/error-pages:/etc/nginx/netlab-errors:ro" \
             netlab/nginx:1.30.6-secure nginx -t
 
       - name: Validate monitoring configuration
