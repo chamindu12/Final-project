@@ -21,7 +21,7 @@ _, values = auth.configuration()
 context = ssl.create_default_context(
     cafile=os.environ.get("NETLAB_CA_FILE", str(Path.home() / "NetLab-certs/netlab.crt"))
 )
-port = values.get("HTTPS_ADMIN_PORT", "8443")
+port = "8080"
 browser = auth.Browser(
     f"https://localhost:{port}/dashboard",
     context=context,

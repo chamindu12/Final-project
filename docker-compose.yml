@@ -1,5 +1,6 @@
 # Containerized Network Services - core services, dashboard, monitoring, hardening
-# Start:  docker compose up -d --build
+# Prepare certificates: python3 scripts/tls-setup.py
+# Start HTTPS: docker compose up -d --build --wait
 # Stop:   docker compose down
 
 name: netlab
@@ -102,10 +103,11 @@ services:
       - admin_sessions:/sessions
     environment:
       COMPOSE_PROJECT: netlab
-      STAFF_PORT: ${STAFF_PORT:-8081}
-      GUEST_PORT: ${GUEST_PORT:-8082}
+      STAFF_PORT: "8081"
+      GUEST_PORT: "8082"
       ADMIN_USERS: ${ADMIN_USERS:?Set ADMIN_USERS in .env (name:password)}
       SESSION_DB_PATH: /sessions/sessions.sqlite3
+      SESSION_COOKIE_SECURE: "1"
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-28800}
       PORTAL_SECRET_KEY: ${PORTAL_SECRET_KEY:?Set PORTAL_SECRET_KEY in .env}
     read_only: true
@@ -136,6 +138,7 @@ services:
       PORTAL_SECRET_KEY: ${PORTAL_SECRET_KEY:?Set PORTAL_SECRET_KEY in .env}
       DATA_DIR: /data
       SESSION_DB_PATH: /sessions/sessions.sqlite3
+      SESSION_COOKIE_SECURE: "1"
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-28800}
     networks:
       lab_net:
@@ -168,6 +171,7 @@ services:
       PORTAL_ROLE: guest
       PORTAL_USERS: ${GUEST_USERS:?Set GUEST_USERS in .env (name:password,name:password)}
       SESSION_DB_PATH: /sessions/sessions.sqlite3
+      SESSION_COOKIE_SECURE: "1"
       SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-28800}
       PORTAL_SECRET_KEY: ${PORTAL_SECRET_KEY:?Set PORTAL_SECRET_KEY in .env}
     networks:
@@ -239,8 +243,6 @@ services:
     networks:
       lab_net:
         ipv4_address: 172.20.0.30
-    ports:
-      - "127.0.0.1:9090:9090"
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -270,15 +272,15 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_SERVER_ROOT_URL: https://localhost:3000/
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_COOKIE_SECURE: "true"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/container-network-services.json
     networks:
       lab_net:
         ipv4_address: 172.20.0.32
-    ports:
-      - "127.0.0.1:3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
@@ -314,6 +316,12 @@ services:
         condition: service_healthy
       guest-portal:
         condition: service_healthy
+      # Recreate monitoring first: their old direct host ports must be released
+      # before the gateway binds those same ports for TLS.
+      prometheus:
+        condition: service_healthy
+      grafana:
+        condition: service_healthy
     # Multi-homed gateway: one interface in each network zone
     networks:
       lab_net:
@@ -322,12 +330,17 @@ services:
         ipv4_address: 172.22.0.11
       isolated_net:
         ipv4_address: 172.21.0.11
+    group_add:
+      - "${TLS_CERT_GID:?Run python3 scripts/tls-setup.py first}"
     ports:
-      - "127.0.0.1:${PROXY_PORT:-8080}:8080"   # admin plane
-      - "127.0.0.1:${STAFF_PORT:-8081}:8081"   # staff portal
-      - "127.0.0.1:${GUEST_PORT:-8082}:8082"   # guest portal
+      - "127.0.0.1:8080:8080"   # HTTPS admin plane
+      - "127.0.0.1:8081:8081"   # HTTPS staff portal
+      - "127.0.0.1:8082:8082"   # HTTPS guest portal
+      - "127.0.0.1:3000:8083"   # HTTPS Grafana through the gateway
+      - "127.0.0.1:9090:8084"   # HTTPS Prometheus through the gateway
     volumes:
       - ./services/reverse-proxy/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${TLS_CERT_DIR:?Run python3 scripts/tls-setup.py first}:/etc/netlab-tls:ro
       - ./services/reverse-proxy/error-pages:/etc/nginx/netlab-errors:ro
     read_only: true
     tmpfs:
@@ -339,7 +352,7 @@ services:
     cpus: 0.5
     pids_limit: 100
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://127.0.0.1:8080/healthz >/dev/null || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 3

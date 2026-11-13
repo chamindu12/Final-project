@@ -15,19 +15,15 @@ def main():
     parser.add_argument("--https", action="store_true")
     parser.add_argument("--ca-file")
     options = parser.parse_args()
-    if options.https != bool(options.ca_file):
-        parser.error("Use --https together with --ca-file; TLS verification is required")
+    if not options.ca_file:
+        parser.error("--ca-file is required; TLS verification is mandatory")
     spec = importlib.util.spec_from_file_location("netlab_ui_auth", ROOT / "scripts/auth-check.py")
     auth = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(auth)
     _, values = auth.configuration()
-    context = ssl.create_default_context(cafile=options.ca_file) if options.https else None
-    scheme = "https" if options.https else "http"
-    ports = {"admin": values.get("HTTPS_ADMIN_PORT", "8443") if options.https else values.get(
-        "PROXY_PORT", "8080"), "staff": values.get(
-        "HTTPS_STAFF_PORT", "8444") if options.https else values.get("STAFF_PORT", "8081"),
-        "guest": values.get("HTTPS_GUEST_PORT", "8445") if options.https else values.get(
-            "GUEST_PORT", "8082")}
+    context = ssl.create_default_context(cafile=options.ca_file)
+    scheme = "https"
+    ports = {"admin": "8080", "staff": "8081", "guest": "8082"}
     passed = 0
 
     def check(condition, label):

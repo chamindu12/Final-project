@@ -7,10 +7,8 @@ capacity certification. Close dashboard tabs and avoid simultaneous tests.
 HTTPS scripts verify the certificate. Default: ~/NetLab-certs/netlab.crt.
 Set NETLAB_CA_FILE for a different path. Authenticated scripts reuse
 scripts/auth-check.py and its .env configuration without printing credentials.
-HTTPS_ADMIN_PORT / HTTPS_STAFF_PORT / HTTPS_GUEST_PORT select custom ports.
-The shell response baseline reads these port overrides from exported environment
-variables, not directly from .env. For the CLI recovery script set NETLAB_WEB_URL
-when the admin origin differs from https://localhost:8443.
+The browser entry points use fixed HTTPS ports 8080/8081/8082. For the CLI
+recovery script set NETLAB_WEB_URL only if a forwarding origin is required.
 
 ## Checks
 

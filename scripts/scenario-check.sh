@@ -12,10 +12,10 @@ DOCKER=${DOCKER:-docker}
 ENV_FILE=${ENV_FILE:-.env}
 P_ADMIN=${P_ADMIN:-8080}; P_STAFF=${P_STAFF:-8081}; P_GUEST=${P_GUEST:-8082}   # ports inside the network
 env_val() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-; }
-HP_ADMIN=$(env_val PROXY_PORT); HP_STAFF=$(env_val STAFF_PORT); HP_GUEST=$(env_val GUEST_PORT)
-ADMIN_URL=${ADMIN_URL:-http://localhost:${HP_ADMIN:-8080}}                      # ports on your machine
-STAFF_HOST_URL=${STAFF_HOST_URL:-http://localhost:${HP_STAFF:-8081}}
-GUEST_HOST_URL=${GUEST_HOST_URL:-http://localhost:${HP_GUEST:-8082}}
+CA_FILE=${NETLAB_CA_FILE:-$HOME/NetLab-certs/netlab.crt}
+ADMIN_URL=${ADMIN_URL:-https://localhost:8080}                      # ports on your machine
+STAFF_HOST_URL=${STAFF_HOST_URL:-https://localhost:8081}
+GUEST_HOST_URL=${GUEST_HOST_URL:-https://localhost:8082}
 PROXY_STAFF=${PROXY_STAFF:-172.22.0.11}   # gateway address inside staff_net
 PROXY_GUEST=${PROXY_GUEST:-172.21.0.11}   # gateway address inside isolated_net
 STAFF_IP=${STAFF_IP:-172.22.0.10}
@@ -72,10 +72,29 @@ require_clients() {
 }
 
 # ---- helpers that run INSIDE a client container -----------------------------
-inc() { local c=$1; shift; "$DOCKER" exec "$c" "$@"; }
+# Clients trust only the public lab certificate copied into their tmpfs.
+curl() { command curl --cacert "$CA_FILE" "$@"; }
+inc() {
+  local c=$1; shift
+  if [ "${1:-}" = curl ]; then
+    shift
+    local ip="$PROXY_STAFF"
+    [ "$c" = isolated-test ] && ip="$PROXY_GUEST"
+    "$DOCKER" exec "$c" curl --cacert /tmp/netlab-ca.crt \
+      --resolve "localhost:$P_ADMIN:$ip" --resolve "localhost:$P_STAFF:$ip" \
+      --resolve "localhost:$P_GUEST:$ip" "$@"
+  else
+    "$DOCKER" exec "$c" "$@"
+  fi
+}
 code_in() { inc "$1" curl -s -o /dev/null -m 5 -w '%{http_code}' "${@:2}"; }
 login_in() { # container base-url user password -> HTTP status of the login POST
-  "$DOCKER" exec -i -e BASE="$2" -e U="$3" -e P="$4" "$1" sh -s <<'EOS'
+  local ip="$PROXY_STAFF"
+  [ "$1" = isolated-test ] && ip="$PROXY_GUEST"
+  "$DOCKER" exec -i -e BASE="$2" -e U="$3" -e P="$4" -e IP="$ip" "$1" sh -s <<'EOS'
+curl() { command curl --cacert /tmp/netlab-ca.crt \
+  --resolve "localhost:8080:$IP" --resolve "localhost:8081:$IP" \
+  --resolve "localhost:8082:$IP" "$@"; }
 rm -f /tmp/jar
 tok=$(curl -s -m 5 -c /tmp/jar "$BASE/login" | sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p')
 curl -s -o /dev/null -m 5 -w '%{http_code}' -b /tmp/jar -c /tmp/jar \
@@ -107,6 +126,10 @@ login_host() { # base-url user password jar
 
 # Abort before any policy PASS if a client or its probe tools are missing.
 require_clients || exit 2
+[ -r "$CA_FILE" ] || { echo 'ERROR: missing lab CA certificate' >&2; exit 2; }
+for client in staff-client isolated-test; do
+  "$DOCKER" exec -i "$client" sh -c 'umask 077; cat > /tmp/netlab-ca.crt' < "$CA_FILE" || exit 2
+done
 
 JAR=$(mktemp); trap 'rm -f "$JAR" "$JAR.2" "$JAR.3"' EXIT
 
@@ -129,7 +152,7 @@ check "staff session cookie is useless on the guest portal" 401 \
   "$(curl -s -o /dev/null -m 5 -w '%{http_code}' -H "Cookie: guest_session=$sv" "$GUEST_HOST_URL/api/whoami")"
 
 echo "== STAFF PC (staff-client on staff_net)"
-SB="http://$PROXY_STAFF:$P_STAFF"
+SB="https://localhost:$P_STAFF"
 if [ -z "${SKIP_DNS:-}" ]; then
   check "internal DNS answers for staff (portal.lab.local)" "$PROXY_STAFF" \
     "$(inc staff-client dig +short +time=2 +tries=1 @"$DNS_STAFF" -p 5353 portal.lab.local)"
@@ -142,9 +165,9 @@ check "gateway reports zone=staff"                  staff "$(json_field "$W" zon
 check "gateway sees the real client address"        "$STAFF_IP" "$(json_field "$W" client_ip)"
 check "staff wrong password is refused"             401 "$(login_in staff-client "$SB" "$STAFF_USER" "not-the-password")"
 login_in staff-client "$SB" "$STAFF_USER" "$STAFF_PASS" >/dev/null
-check "staff 10 MB speed test"                      10485760 "$(inc staff-client sh -c "curl -s -m 30 -b /tmp/jar '$SB/speedtest?mb=10' | wc -c")"
-check "staff blocked from the admin plane (:$P_ADMIN)" 403 "$(code_in staff-client "http://$PROXY_STAFF:$P_ADMIN/")"
-check "staff blocked from the guest portal (:$P_GUEST)" 403 "$(code_in staff-client "http://$PROXY_STAFF:$P_GUEST/login")"
+check "staff 10 MiB test download"                      10485760 "$(inc staff-client curl -s -m 30 -b /tmp/jar "$SB/speedtest?mb=10" | wc -c)"
+check "staff blocked from the admin plane (:$P_ADMIN)" 403 "$(code_in staff-client "https://localhost:$P_ADMIN/")"
+check "staff blocked from the guest portal (:$P_GUEST)" 403 "$(code_in staff-client "https://localhost:$P_GUEST/login")"
 check "staff cannot reach the web server directly"  yes "$(unreachable_in staff-client "http://$BACKEND:8080/")"
 check "staff cannot reach the dashboard container"  yes "$(unreachable_in staff-client "http://$DASHBOARD_IP:5000/")"
 check "staff cannot reach the guest network gateway" yes "$(unreachable_in staff-client "http://$PROXY_GUEST:$P_GUEST/login")"
@@ -158,7 +181,7 @@ if [ -z "${SKIP_ICMP:-}" ]; then
 fi
 
 echo "== GUEST PC (isolated-test on isolated_net)"
-GB="http://$PROXY_GUEST:$P_GUEST"
+GB="https://localhost:$P_GUEST"
 gpause() { sleep 0.6; }   # stay under the guest rate limit (2 requests per second)
 gpause; check "guest portal login page via the gateway" 200 "$(code_in isolated-test "$GB/login")"
 gpause; check "guest login with a guest account"     302 "$(login_in isolated-test "$GB" "$GUEST_USER" "$GUEST_PASS")"
@@ -168,10 +191,10 @@ check "gateway reports zone=guest"                  guest "$(json_field "$W" zon
 check "gateway sees the real client address"        "$GUEST_IP" "$(json_field "$W" client_ip)"
 gpause; check "staff account is refused on the guest portal" 401 "$(login_in isolated-test "$GB" "$STAFF_USER" "$STAFF_PASS")"
 gpause; login_in isolated-test "$GB" "$GUEST_USER" "$GUEST_PASS" >/dev/null
-gpause; check "guest speed test above 1 MB is refused" 403 "$(code_in isolated-test -b /tmp/jar "$GB/speedtest?mb=5")"
-gpause; check "guest 1 MB speed test"               1048576 "$(inc isolated-test sh -c "curl -s -m 30 -b /tmp/jar '$GB/speedtest?mb=1' | wc -c")"
-gpause; check "guest blocked from the staff portal (:$P_STAFF)" 403 "$(code_in isolated-test "http://$PROXY_GUEST:$P_STAFF/login")"
-gpause; check "guest blocked from the admin plane (:$P_ADMIN)"  403 "$(code_in isolated-test "http://$PROXY_GUEST:$P_ADMIN/")"
+gpause; check "guest speed test above 1 MiB is refused" 403 "$(code_in isolated-test -b /tmp/jar "$GB/speedtest?mb=5")"
+gpause; check "guest 1 MiB test download"               1048576 "$(inc isolated-test curl -s -m 30 -b /tmp/jar "$GB/speedtest?mb=1" | wc -c)"
+gpause; check "guest blocked from the staff portal (:$P_STAFF)" 403 "$(code_in isolated-test "https://localhost:$P_STAFF/login")"
+gpause; check "guest blocked from the admin plane (:$P_ADMIN)"  403 "$(code_in isolated-test "https://localhost:$P_ADMIN/")"
 check "guest cannot reach the web server directly"  yes "$(unreachable_in isolated-test "http://$BACKEND:8080/")"
 check "guest cannot reach the staff network gateway" yes "$(unreachable_in isolated-test "http://$PROXY_STAFF:$P_STAFF/login")"
 if [ -z "${SKIP_DNS:-}" ]; then
@@ -187,8 +210,8 @@ if [ -z "${SKIP_ICMP:-}" ]; then
   fi
 fi
 sleep 1
-flood=$("$DOCKER" exec -i -e URL="$GB/login" isolated-test sh -s <<'EOS'
-for i in $(seq 1 30); do curl -s -o /dev/null -m 5 -w '%{http_code}\n' "$URL"; done | grep -c 429
+flood=$("$DOCKER" exec -i -e URL="$GB/login" -e IP="$PROXY_GUEST" isolated-test sh -s <<'EOS'
+for i in $(seq 1 30); do curl --cacert /tmp/netlab-ca.crt --resolve "localhost:8082:$IP" -s -o /dev/null -m 5 -w '%{http_code}\n' "$URL"; done | grep -c 429
 EOS
 )
 check "guest request flood is rate limited (HTTP 429)" yes "$([ "${flood:-0}" -gt 5 ] && echo yes || echo no)"

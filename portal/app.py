@@ -73,9 +73,9 @@ SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", "28800"))
 if not 1 <= SESSION_TTL_SECONDS <= 86400:
     raise RuntimeError("SESSION_TTL_SECONDS must be between 1 and 86400")
 
-SECURE_COOKIES = os.environ.get("SESSION_COOKIE_SECURE", "0")
-if SECURE_COOKIES not in ("0", "1"):
-    raise RuntimeError("SESSION_COOKIE_SECURE must be 0 or 1")
+SECURE_COOKIES = os.environ.get("SESSION_COOKIE_SECURE", "1")
+if SECURE_COOKIES != "1":
+    raise RuntimeError("SESSION_COOKIE_SECURE must be 1: HTTPS-only deployment")
 
 app = Flask(__name__)
 if SECURE_COOKIES == "1":

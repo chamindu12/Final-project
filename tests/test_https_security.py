@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("role", ACCOUNTS)
-@pytest.mark.parametrize("secure", ["0", "1"])
+@pytest.mark.parametrize("secure", ["1"])
 def test_cookie_flags_and_authentication_in_each_mode(monkeypatch, tmp_path, role, secure):
     monkeypatch.setenv("SESSION_COOKIE_SECURE", secure)
     mod = load_app(monkeypatch, tmp_path, role)
@@ -38,14 +38,14 @@ def test_cookie_flags_and_authentication_in_each_mode(monkeypatch, tmp_path, rol
 
 
 @pytest.mark.parametrize("role", ACCOUNTS)
-@pytest.mark.parametrize("value", ["true", "invalid", ""])
+@pytest.mark.parametrize("value", ["0", "true", "invalid", ""])
 def test_invalid_secure_cookie_setting_fails_closed(monkeypatch, tmp_path, role, value):
     monkeypatch.setenv("SESSION_COOKIE_SECURE", value)
-    with pytest.raises(RuntimeError, match="SESSION_COOKIE_SECURE must be 0 or 1"):
+    with pytest.raises(RuntimeError, match="SESSION_COOKIE_SECURE must be 1"):
         load_app(monkeypatch, tmp_path, role)
 
 
-@pytest.mark.parametrize("secure,expected_scheme", [("0", "http"), ("1", "https")])
+@pytest.mark.parametrize("secure,expected_scheme", [("1", "https")])
 def test_portal_redirect_uses_only_gateway_scheme_header(
         monkeypatch, tmp_path, secure, expected_scheme):
     monkeypatch.setenv("SESSION_COOKIE_SECURE", secure)
@@ -67,11 +67,11 @@ def test_portal_redirect_uses_only_gateway_scheme_header(
 
 
 def test_https_gateway_replaces_client_scheme_and_keeps_zone_rules():
-    conf = (ROOT / "services/reverse-proxy/https.conf").read_text()
+    conf = (ROOT / "services/reverse-proxy/default.conf").read_text()
     for port in (8080, 8081, 8082):
         assert f"listen {port} ssl;" in conf
     assert "ssl_protocols TLSv1.2 TLSv1.3;" in conf
-    assert conf.count("proxy_set_header X-Forwarded-Proto $scheme;") == 6
+    assert conf.count("proxy_set_header X-Forwarded-Proto $scheme;") == 8
     for zone in ("admin", "staff", "guest"):
         assert f"if (${zone}_ok = 0)" in conf
 
@@ -94,7 +94,7 @@ def test_auth_checker_uses_verifying_tls_context():
     assert context.check_hostname is True
 
 
-@pytest.mark.parametrize("args", [["--https"], ["--ca-file", "cert.pem"]])
+@pytest.mark.parametrize("args", [[], ["--https"]])
 def test_auth_checker_rejects_incomplete_https_options(monkeypatch, args):
     mod = auth_script()
     monkeypatch.setattr("sys.argv", ["auth-check.py", *args])

@@ -21,9 +21,9 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from session_store import SessionStore
 
-SECURE_COOKIES = os.environ.get("SESSION_COOKIE_SECURE", "0")
-if SECURE_COOKIES not in ("0", "1"):
-    raise RuntimeError("SESSION_COOKIE_SECURE must be 0 or 1")
+SECURE_COOKIES = os.environ.get("SESSION_COOKIE_SECURE", "1")
+if SECURE_COOKIES != "1":
+    raise RuntimeError("SESSION_COOKIE_SECURE must be 1: HTTPS-only deployment")
 
 app = Flask(__name__)
 if SECURE_COOKIES == "1":
@@ -381,7 +381,7 @@ def portal_sign_in(role):
     hostname = urlsplit(request.host_url).hostname
     if ":" in hostname:
         hostname = f"[{hostname}]"
-    target = urlunsplit((request.scheme, f"{hostname}:{port}", "/", "", ""))
+    target = urlunsplit(("https", f"{hostname}:{port}", "/", "", ""))
     return redirect(target)
 
 

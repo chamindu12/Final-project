@@ -59,6 +59,8 @@ if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; th
 fi
 grep -q 'portal.lab.local' services/dns/dnsmasq.conf 2>/dev/null || fail "services/dns/dnsmasq.conf has no portal.lab.local record (see dnsmasq.addition.txt)"
 
+python3 scripts/tls-setup.py --check || fail "TLS setup needs attention"
+
 echo "== docker"
 if ! command -v docker >/dev/null 2>&1; then
   note "docker not found here, so compose and port checks are skipped"
@@ -71,13 +73,8 @@ else
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx nginx-proxy; then
     echo "OK    stack already running, so port checks are skipped"
   else
-    for p in "$(val .env PROXY_PORT)" "$(val .env STAFF_PORT)" "$(val .env GUEST_PORT)" 3000 9090 5353; do
-      [ -z "$p" ] && continue
-      (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null && note "port $p is already in use on this machine (change it in .env or stop the other program)"
-    done
-    for p in 8080 8081 8082; do   # defaults, when .env does not override them
-      case "$p" in 8080) k=PROXY_PORT;; 8081) k=STAFF_PORT;; *) k=GUEST_PORT;; esac
-      [ -z "$(val .env $k)" ] && (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null && note "port $p is already in use on this machine (set $k in .env)"
+    for p in 8080 8081 8082 3000 9090; do
+      (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null && note "port $p is already in use"
     done
   fi
 fi

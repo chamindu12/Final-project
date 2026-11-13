@@ -1,3 +1,7 @@
 .env
 __pycache__/
 *.pyc
+
+# Local TLS material must never enter version control.
+*.key
+NetLab-certs/

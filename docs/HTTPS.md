@@ -1,78 +1,63 @@
-# Local HTTPS mode
+# HTTPS-only configuration
 
-The base Compose file is the HTTP lab/CI mode. Opt into HTTPS with:
+The only deployment file is docker-compose.yml. Admin, staff and guest use
+https://localhost:8080, :8081 and :8082 respectively. Grafana :3000 and Prometheus
+:9090 are also served through TLS gateway listeners. There is no plaintext browser
+mode, no duplicate port-variable family and no separate overlay.
 
-```bash
-bash scripts/https-compose.sh config -q
-bash scripts/https-compose.sh build dashboard staff-portal
-bash scripts/https-compose.sh up -d --no-deps --wait --wait-timeout 180 dashboard staff-portal guest-portal nginx-proxy
-```
-
-Requires Docker Compose 2.24.4 or newer (`!override` replaces HTTP port bindings).
-The full stack must already be running before using `--no-deps`.
-
-Provide `netlab.crt` and `netlab.key` in `$HOME/NetLab-certs` or set `TLS_CERT_DIR`.
-The certificate SAN must include localhost and 127.0.0.1. For this lab, use the
-self-signed certificate explicitly as the trust anchor with `--cacert` / `--ca-file`.
-Self-signed trust is not public CA validation and does not automatically make
-Windows/Chrome trust the certificate. Never commit the key or copy it into an image.
-
-The proxy remains non-root. Give its supplemental group read access to the key:
+Run `python3 scripts/tls-setup.py` before first deployment. It uses
+`$HOME/NetLab-certs` by default and persists the absolute directory/group in .env.
+It backs up .env privately, removes obsolete port/mode overrides, preserves accounts,
+and refuses to overwrite incomplete or invalid existing TLS files. Key mode is 640;
+certificate-directory mode is 750. The gateway remains non-root and mounts TLS read-only.
 
 ```bash
-chgrp "$(id -g)" "$HOME/NetLab-certs" "$HOME/NetLab-certs/netlab.key"
-chmod 750 "$HOME/NetLab-certs"
-chmod 640 "$HOME/NetLab-certs/netlab.key"
+bash scripts/ui-deploy.sh
+bash scripts/scenario-check.sh
 ```
 
-The wrapper defaults `TLS_CERT_GID` to the host primary group ID. Use a private
-host group when other users share this machine. The certificate mount is read-only.
+The current self-signed certificate is valid for the new ports if its identity and
+expiry are valid: TLS certificates identify hostnames/IPs, not TCP port numbers.
+Browser trust and protocol selection are separate: type the full https:// URL.
+Use the Docker host's browser, or SSH/VM/WSL forwarding for a different machine.
+To forward a remote Linux host to Windows PowerShell, replace LINUX_IP:
 
-Default entry points:
+```powershell
+ssh -N -L 8080:127.0.0.1:8080 -L 8081:127.0.0.1:8081 -L 8082:127.0.0.1:8082 -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 chamindu_linux@LINUX_IP
+```
 
-- https://localhost:8443/ (admin and landing page)
-- https://localhost:8444/ (staff)
-- https://localhost:8445/ (guest)
+## Browser certificate trust
 
-Set HTTPS_ADMIN_PORT / HTTPS_STAFF_PORT / HTTPS_GUEST_PORT to change these host
-ports. The dashboard uses the same HTTPS portal port values for landing redirects.
-The original host HTTP mappings 8080/8081/8082 are removed in this mode.
-HTTP requests sent to a TLS listener are rejected; there is no HTTP redirect listener.
+Verify the public certificate fingerprint on the Linux host with
+`openssl x509 -in "$HOME/NetLab-certs/netlab.crt" -noout -fingerprint -sha256`.
+For a Windows browser, transfer only netlab.crt from your own host, verify its
+fingerprint, and import it into your current user's Trusted Root Certification
+Authorities using Windows certificate management (certmgr.msc). Restart the browser.
+This trusts that certificate in the chosen account. Remove it when the lab is retired.
+For Linux Chrome/Firefox, use the browser's certificate/Authorities manager to import
+the public lab certificate for website trust; the exact UI depends on browser/OS.
+The private netlab.key must stay on the Docker host. CLI checks explicitly trust
+netlab.crt with --ca-file/--cacert rather than disabling verification.
 
-Validate identity and auth with:
+## Checks and cookies
 
 ```bash
-curl --cacert "$HOME/NetLab-certs/netlab.crt" https://localhost:8443/healthz
-python3 scripts/auth-check.py --https --ca-file "$HOME/NetLab-certs/netlab.crt" --rate-limit
+curl --cacert "$HOME/NetLab-certs/netlab.crt" https://localhost:8080/healthz
+python3 scripts/https-check.py --ca-file "$HOME/NetLab-certs/netlab.crt"
+python3 scripts/auth-check.py --ca-file "$HOME/NetLab-certs/netlab.crt"
 ```
 
-The auth checker validates the certificate and hostname. It verifies Secure,
-HttpOnly and SameSite=Lax flags, login/logout, cookie replay, self-protection,
-and optional login throttling. It has no insecure certificate-bypass option.
-Wait 60 seconds after its flood test before another admin login attempt.
+Inspect cookies with DevTools > Application > Storage > Cookies after login.
+Check Secure, HttpOnly and SameSite=Lax, then test logout and protected API denial.
+HttpOnly blocks page JavaScript access; it does not hide cookies from DevTools.
+The browser can inspect decrypted requests/responses; TLS protects traffic in transit.
 
-Secure cookie mode trusts only one gateway's X-Forwarded-Proto header; the TLS
-Nginx configuration overwrites that header. Forwarded host, port, prefix and client
-IP middleware overrides are disabled. Application containers must remain private
-behind the gateway. Flask health checks use internal HTTP and require no session.
-The Nginx health probe skips certificate trust only for its local liveness check;
-external validation must use the trusted certificate.
+TLS terminates at the gateway; private Docker HTTP upstreams and scrape/health
+endpoints remain. No HTTP web endpoint is published from a backend container.
+The gateway's local liveness probe uses --no-check-certificate only inside that
+container. External acceptance checks verify certificate identity and trust.
 
-## Scope and limitations
-
-TLS protects client-to-gateway traffic. Gateway-to-Flask traffic is still HTTP
-inside the backend network. Grafana/Prometheus loopback endpoints are not converted
-to HTTPS by this overlay. No HSTS policy or host trust-store installation is applied.
-The HTTP scenario checker is for the base mode, not this TLS listener setup.
-Unit tests retain coverage for HTTP behavior and the HTTPS cookie configuration;
-run live zone checks separately for HTTPS before claiming full TLS policy validation.
-
-## Return to HTTP lab mode
-
-```bash
-docker compose up -d --no-deps --wait --wait-timeout 180 dashboard staff-portal guest-portal nginx-proxy
-```
-
-Do not use `down -v`; existing notes, files, metrics and session volumes are preserved.
-A Secure cookie from HTTPS is not sent on HTTP, so sign in again after switching mode.
-Use the HTTPS wrapper consistently while the TLS deployment is active.
+For short session expiry checks, change SESSION_TTL_SECONDS temporarily, recreate
+dashboard/staff-portal/guest-portal, run auth-check.py --ca-file ... --expiry-seconds 15,
+then restore the normal TTL and recreate those three services. Do not run a flood
+rate-limit check immediately before interactive login; allow 60 seconds to recover.

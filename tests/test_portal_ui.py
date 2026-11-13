@@ -137,8 +137,7 @@ def test_notes_and_empty_notes_have_feedback(ui):
     assert len(ui.load_notes()) == 1
 
 
-@pytest.mark.parametrize("secure,scheme,label", [("0", "http", "HTTP connection"),
-                                                 ("1", "https", "HTTPS connection")])
+@pytest.mark.parametrize("secure,scheme,label", [("1", "https", "HTTPS connection")])
 def test_connection_label_does_not_invent_tls(monkeypatch, tmp_path, secure, scheme, label):
     mod = load(monkeypatch, "staff", "alice:StaffPass1", tmp_path, SESSION_COOKIE_SECURE=secure)
     client = mod.app.test_client()
@@ -173,10 +172,10 @@ def test_assets_are_packaged_and_shared_styles_match():
     assert 'href="/web/assets/netlab.css"' in landing
 
 
-def test_gateway_error_assets_exist_in_http_and_https_modes():
+def test_gateway_error_assets_exist_in_https_mode():
     assert "./services/reverse-proxy/error-pages:/etc/nginx/netlab-errors:ro" in (
         ROOT / "docker-compose.yml").read_text()
-    for config in ["default.conf", "https.conf"]:
+    for config in ["default.conf"]:
         text = (ROOT / "services/reverse-proxy" / config).read_text()
         assert text.count("alias /etc/nginx/netlab-errors/;") == 3
         assert text.count("        internal;") == 3
