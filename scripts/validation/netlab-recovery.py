@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.request import urlopen
 
-url = os.environ.get("NETLAB_WEB_URL", "https://localhost:8443/web/")
+url = os.environ.get("NETLAB_WEB_URL", "https://localhost:8080/web/")
 context = ssl.create_default_context(
     cafile=os.environ.get("NETLAB_CA_FILE", str(Path.home() / "NetLab-certs/netlab.crt"))
 )

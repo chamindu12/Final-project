@@ -3,6 +3,8 @@ import argparse
 import csv
 import json
 import math
+import os
+import ssl
 import time
 from datetime import datetime
 from pathlib import Path
@@ -15,10 +17,16 @@ parser.add_argument('--interval', type=float, default=2)
 parser.add_argument('--project', default='netlab')
 parser.add_argument('--service', default='nginx-web')
 parser.add_argument('--instance', default='cadvisor:8080')
-parser.add_argument('--prometheus', default='http://localhost:9090')
+parser.add_argument('--prometheus', default='https://localhost:9090')
+parser.add_argument('--ca-file', default=os.environ.get(
+    'NETLAB_CA_FILE', str(Path.home() / 'NetLab-certs/netlab.crt')))
 args = parser.parse_args()
 if args.samples < 1 or args.interval <= 0:
     parser.error('samples must be positive; interval must be greater than zero')
+
+if not args.prometheus.startswith('https://'):
+    parser.error('--prometheus must use HTTPS')
+context = ssl.create_default_context(cafile=args.ca_file)
 
 selector = (
     'container_last_seen{job="cadvisor",'
@@ -31,7 +39,7 @@ up = f'up{{job="cadvisor",instance={json.dumps(args.instance)}}}'
 
 def query(expression, evaluation):
     params = urlencode({'query': expression, 'time': f'{evaluation:.6f}'})
-    with urlopen(args.prometheus.rstrip('/') + '/api/v1/query?' + params, timeout=10) as r:
+    with urlopen(args.prometheus.rstrip('/') + '/api/v1/query?' + params, timeout=10, context=context) as r:
         data = json.load(r)
     if data.get('status') != 'success':
         raise RuntimeError('Prometheus query failed')

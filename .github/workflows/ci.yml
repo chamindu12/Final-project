@@ -53,8 +53,8 @@ jobs:
         env:
           COVERAGE_FILE: security-reports/coverage/.coverage
         run: |
-          pip install -r dashboard/requirements.txt -r portal/requirements.txt flake8 pytest coverage
-          flake8 dashboard/app.py dashboard/session_store.py portal/app.py portal/session_store.py tests scripts/auth-check.py --max-line-length=100
+          pip install -r dashboard/requirements.txt -r portal/requirements.txt flake8 pytest coverage PyYAML
+          flake8 dashboard/app.py dashboard/session_store.py portal/app.py portal/session_store.py tests scripts/https-check.py scripts/tls-setup.py scripts/auth-check.py --max-line-length=100
           mkdir -p security-reports/coverage
           python -m coverage run --branch --source=dashboard,portal -m pytest tests -q
           python -m coverage report -m
@@ -73,12 +73,12 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Check gateway configuration (nginx syntax)
+      - name: Prepare local TLS and check gateway configuration
         run: |
+          cp .env.example .env
+          python3 scripts/tls-setup.py
           docker build -t netlab/nginx:1.30.6-secure services/reverse-proxy
-          docker run --rm -v "$PWD/services/reverse-proxy/default.conf:/etc/nginx/conf.d/default.conf:ro" \
-            -v "$PWD/services/reverse-proxy/error-pages:/etc/nginx/netlab-errors:ro" \
-            netlab/nginx:1.30.6-secure nginx -t
+          bash scripts/ui-check-config.sh
 
       - name: Validate monitoring configuration
         run: |
@@ -87,9 +87,7 @@ jobs:
             prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06 check config /cfg/prometheus.yml
 
       - name: Validate compose file
-        run: |
-          cp .env.example .env
-          docker compose config -q
+        run: docker compose config -q
 
   build-and-test:
     needs: lint
@@ -102,6 +100,7 @@ jobs:
           cp .env.example .env
           socket_gid=$(stat -c '%g' /var/run/docker.sock)
           sed -i "s/^DOCKER_GID=.*/DOCKER_GID=$socket_gid/" .env
+          python3 scripts/tls-setup.py
 
       - name: Build images
         run: docker compose build
@@ -114,29 +113,29 @@ jobs:
 
       - name: Smoke test reverse proxy
         run: |
-          curl -fsS http://localhost:8080/healthz
-          curl -fsS http://localhost:8080/ | grep -q "NetLab Network Services"
-          curl -fsS http://localhost:8080/web/ | grep -q "NetLab Network Services"
+          curl --cacert "$HOME/NetLab-certs/netlab.crt" -fsS https://localhost:8080/healthz
+          curl --cacert "$HOME/NetLab-certs/netlab.crt" -fsS https://localhost:8080/ | grep -q "NetLab Network Services"
+          curl --cacert "$HOME/NetLab-certs/netlab.crt" -fsS https://localhost:8080/web/ | grep -q "NetLab Network Services"
 
       - name: Smoke test dashboard sign-in, page and API
         run: |
-          base=http://localhost:8080/dashboard
+          base=https://localhost:8080/dashboard
           pair=$(grep '^ADMIN_USERS=' .env | cut -d= -f2- | cut -d, -f1)
           user=${pair%%:*}; pass=${pair#*:}
-          curl -fsS $base/api/health | grep -q '"status":"ok"'
-          test "$(curl -s -o /dev/null -w '%{http_code}' $base/api/containers)" = 401
+          curl --cacert "$HOME/NetLab-certs/netlab.crt" -fsS $base/api/health | grep -q '"status":"ok"'
+          test "$(curl --cacert "$HOME/NetLab-certs/netlab.crt" -s -o /dev/null -w '%{http_code}' $base/api/containers)" = 401
           jar=$(mktemp)
-          tok=$(curl -fsS -c "$jar" $base/login | sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p')
-          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -c "$jar" --data-urlencode "csrf_token=$tok" --data-urlencode "username=$user" --data-urlencode "password=wrong" $base/login)" = 401
-          test "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -c "$jar" --data-urlencode "csrf_token=$tok" --data-urlencode "username=$user" --data-urlencode "password=$pass" $base/login)" = 302
-          curl -fsS -b "$jar" $base/ | grep -q "NetLab Control"
-          curl -fsS -b "$jar" $base/api/containers | grep -q nginx-web
+          tok=$(curl --cacert "$HOME/NetLab-certs/netlab.crt" -fsS -c "$jar" $base/login | sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p')
+          test "$(curl --cacert "$HOME/NetLab-certs/netlab.crt" -s -o /dev/null -w '%{http_code}' -b "$jar" -c "$jar" --data-urlencode "csrf_token=$tok" --data-urlencode "username=$user" --data-urlencode "password=wrong" $base/login)" = 401
+          test "$(curl --cacert "$HOME/NetLab-certs/netlab.crt" -s -o /dev/null -w '%{http_code}' -b "$jar" -c "$jar" --data-urlencode "csrf_token=$tok" --data-urlencode "username=$user" --data-urlencode "password=$pass" $base/login)" = 302
+          curl --cacert "$HOME/NetLab-certs/netlab.crt" -fsS -b "$jar" $base/ | grep -q "NetLab Control"
+          curl --cacert "$HOME/NetLab-certs/netlab.crt" -fsS -b "$jar" $base/api/containers | grep -q nginx-web
           echo "ADMIN_JAR=$jar" >> "$GITHUB_ENV"
 
       - name: Check dashboard files are served
         run: |
           check() {
-            size=$(curl -fsS "http://localhost:8080/dashboard/static/$1" | wc -c)
+            size=$(curl --cacert "$HOME/NetLab-certs/netlab.crt" -fsS "https://localhost:8080/dashboard/static/$1" | wc -c)
             echo "$1: $size bytes"
             [ "$size" -ge "$2" ]
           }
@@ -148,7 +147,7 @@ jobs:
       - name: Check Prometheus collects metrics
         run: |
           prom() {
-            curl -fsS -G --data-urlencode "query=$1" http://localhost:9090/api/v1/query |
+            curl --cacert "$HOME/NetLab-certs/netlab.crt" -fsS -G --data-urlencode "query=$1" https://localhost:9090/api/v1/query |
               python3 -c "import sys,json; print(json.load(sys.stdin)['data']['result'][0]['value'][1])" || echo 0
           }
           for i in $(seq 1 18); do
@@ -159,16 +158,16 @@ jobs:
             sleep 5
           done
           echo "Prometheus did not get the expected metrics"
-          curl -s http://localhost:9090/api/v1/targets
+          curl --cacert "$HOME/NetLab-certs/netlab.crt" -s https://localhost:9090/api/v1/targets
           exit 1
 
       - name: Smoke test dashboard historical chart API
         run: |
           for i in $(seq 1 12); do
-            if response=$(curl -fsS -b "$ADMIN_JAR" -G \
+            if response=$(curl --cacert "$HOME/NetLab-certs/netlab.crt" -fsS -b "$ADMIN_JAR" -G \
               --data-urlencode "name=nginx-web" \
               --data-urlencode "minutes=5" \
-              http://localhost:8080/dashboard/api/metrics/history) &&
+              https://localhost:8080/dashboard/api/metrics/history) &&
               printf '%s' "$response" | python3 -c '
           import json, sys
           data = json.load(sys.stdin)
@@ -189,12 +188,12 @@ jobs:
       - name: Check Grafana provisioning
         run: |
           pw=$(grep '^GRAFANA_ADMIN_PASSWORD=' .env | cut -d= -f2-)
-          curl -fsS -u "admin:$pw" http://localhost:3000/api/datasources/uid/prometheus | grep -q '"type":"prometheus"'
-          curl -fsS -u "admin:$pw" -G --data-urlencode "query=Container Network Services" \
-            http://localhost:3000/api/search | grep -q "Container Network Services"
+          curl --cacert "$HOME/NetLab-certs/netlab.crt" -fsS -u "admin:$pw" https://localhost:3000/api/datasources/uid/prometheus | grep -q '"type":"prometheus"'
+          curl --cacert "$HOME/NetLab-certs/netlab.crt" -fsS -u "admin:$pw" -G --data-urlencode "query=Container Network Services" \
+            https://localhost:3000/api/search | grep -q "Container Network Services"
 
       - name: Check dashboard monitoring status
-        run: curl -fsS -b "$ADMIN_JAR" http://localhost:8080/dashboard/api/monitoring | grep -q '"ok":true'
+        run: curl --cacert "$HOME/NetLab-certs/netlab.crt" -fsS -b "$ADMIN_JAR" https://localhost:8080/dashboard/api/monitoring | grep -q '"ok":true'
 
       - name: Test custom DNS
         run: |
@@ -209,6 +208,11 @@ jobs:
             echo "Isolation is broken: isolated_net can reach lab_net"
             exit 1
           fi
+
+      - name: Verify published TLS bindings and authentication
+        run: |
+          python3 scripts/https-check.py --ca-file "$HOME/NetLab-certs/netlab.crt"
+          python3 scripts/auth-check.py --ca-file "$HOME/NetLab-certs/netlab.crt"
 
       - name: Scenario policy checks (admin, staff, guest)
         run: bash scripts/scenario-check.sh

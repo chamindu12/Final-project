@@ -9,9 +9,9 @@ cert="${NETLAB_CA_FILE:-$HOME/NetLab-certs/netlab.crt}"
 
 printf 'endpoint,http_code,connect_s,tls_s,ttfb_s,total_s\n' > "$report"
 
-for port in "${HTTPS_ADMIN_PORT:-8443}" "${HTTPS_STAFF_PORT:-8444}" "${HTTPS_GUEST_PORT:-8445}"; do
+for port in 8080 8081 8082; do
   endpoint="https://localhost:${port}/login"
-  if [ "$port" = "${HTTPS_ADMIN_PORT:-8443}" ]; then
+  if [ "$port" = 8080 ]; then
     endpoint="https://localhost:${port}/"
   fi
 

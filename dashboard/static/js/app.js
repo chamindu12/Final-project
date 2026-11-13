@@ -708,7 +708,7 @@
     text.textContent = "Live \u00b7 refreshed " + age + " s ago";
   }, 1000);
 
-  // Compose publishes both monitoring ports only on the local host.
-  $("grafanaLink").href = "http://localhost:3000";
-  $("prometheusLink").href = "http://localhost:9090/targets";
+  // Monitoring is published through the TLS gateway on the same host.
+  $("grafanaLink").href = "https://" + window.location.hostname + ":3000/";
+  $("prometheusLink").href = "https://" + window.location.hostname + ":9090/targets";
 })();

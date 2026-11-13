@@ -33,12 +33,10 @@ with report.open("w", newline="") as output:
     ])
 
     for role, mb, default_port in (
-        ("staff", 10, "8444"),
-        ("guest", 1, "8445"),
+        ("staff", 10, "8081"),
+        ("guest", 1, "8082"),
     ):
-        port = values.get(
-            f"HTTPS_{role.upper()}_PORT", default_port
-        )
+        port = default_port
         browser = auth.Browser(
             f"https://localhost:{port}", context=context
         )

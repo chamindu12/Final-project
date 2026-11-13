@@ -54,49 +54,19 @@ No session schema, credentials, secrets, certificate paths or application data v
 are changed. New file metadata comes from `stat()`, not assumed upload ownership/dates.
 The existing authentication, CSRF, role and atomic file-publication checks are retained.
 
-## Install and validate
+## Install and validate (HTTPS only)
 
-The delivery ZIP includes a guarded installer, patch and every changed source file.
-Run its `apply.py` from the repository root. It checks original file hashes and refuses
-conflicting changes, then saves a source backup under `~/NetLab-backups`. Untracked
-`security-reports/` can remain. Do not manually copy the `files/` folder over your repo.
-The installer is idempotent: a fully applied matching package is detected safely.
-
-The simplest HTTPS upgrade is `bash scripts/ui-deploy.sh https`. It runs the full
-regression suite, validates configuration, builds/recreates the UI services, and checks
-live endpoints. Use `http` only when deliberately operating the base HTTP stack.
-
-To run each step individually, start with the complete regression suite:
+Use the guarded HTTPS package on the existing UI branch. Then run:
 
 ```bash
-bash scripts/ui-tests.sh
-```
-
-For the HTTPS deployment already used by this project:
-
-```bash
-bash scripts/ui-check-config.sh https
-bash scripts/https-compose.sh build staff-portal
-bash scripts/https-compose.sh up -d --no-deps --no-build --pull never --force-recreate --wait --wait-timeout 180 dashboard staff-portal guest-portal nginx-web nginx-proxy
-python3 scripts/ui-smoke-check.py --https --ca-file "$HOME/NetLab-certs/netlab.crt"
-python3 scripts/auth-check.py --https --ca-file "$HOME/NetLab-certs/netlab.crt"
-```
-
-The syntax check runs Nginx in the existing project image with its real configuration,
-error-page directory and TLS mounts. It must succeed **before** service recreation.
-The base HTTP alternative is deliberately separate:
-
-```bash
-bash scripts/ui-check-config.sh http
-docker compose build staff-portal
-docker compose up -d --no-deps --no-build --pull never --force-recreate --wait --wait-timeout 180 dashboard staff-portal guest-portal nginx-web nginx-proxy
-python3 scripts/ui-smoke-check.py
+bash scripts/ui-deploy.sh
 bash scripts/scenario-check.sh
 ```
 
-Do not run the HTTP scenario checker against HTTPS ports. Do not use `down -v`.
-Custom port environment variables are supported through the existing configuration;
-export the same overrides when invoking validation as when deploying.
+The base Compose configuration is HTTPS-only on 8080/8081/8082. Monitoring ports
+3000/9090 also require HTTPS. See docs/HTTPS.md for trust/forwarding instructions.
+There is no HTTP deployment alternative or separate HTTPS overlay. Existing
+authentication, data and named volumes are retained.
 
 ## Manual browser acceptance
 
@@ -124,8 +94,7 @@ production-readiness claim follows from this UI change.
 The installer prints its backup path and stores it in the unpacked package's
 `last-backup.txt`. Run that package's `rollback.py` from the project root. It refuses
 rollback if any upgraded file has since been changed, so later work is not overwritten.
-Rebuild the portal image and recreate the same five services using the same HTTP/HTTPS
-commands above. Source rollback does not restore or delete application data volumes.
+Rebuild the portal image and recreate the same five services using the configuration restored by that package. Source rollback does not restore or delete application data volumes.
 
 ## Evaluation evidence
 

@@ -38,8 +38,8 @@ def load_dashboard(monkeypatch, tmp_path):
 @pytest.mark.parametrize("ports", [{}, {"STAFF_PORT": "9081", "GUEST_PORT": "9082"}])
 @pytest.mark.parametrize("role", ["staff", "guest"])
 @pytest.mark.parametrize("base,host,scheme", [
-    ("http://localhost:9080", "localhost", "http"),
-    ("http://127.0.0.1:9080", "127.0.0.1", "http"),
+    ("http://localhost:9080", "localhost", "https"),
+    ("http://127.0.0.1:9080", "127.0.0.1", "https"),
     ("https://[::1]:9443", "[::1]", "https"),
 ])
 def test_public_link_preserves_host_and_uses_configured_port(
