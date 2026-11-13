@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ error_title }}{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="error-title">
+  <p class="error-number">{{ error_code }} &middot; Request not completed</p>
+  <h1 id="error-title">{{ error_title }}</h1>
+  <div class="message message-error" role="alert">{{ icon('info') }}<p>{{ error_message }}</p></div>
+  <p class="muted">{{ error_hint }}</p>
+  <div class="row"><a class="button" href="{{ url_for('home') }}">Return to portal {{ icon('arrow') }}</a><a class="button button-secondary" href="{{ url_for('help_page') }}">Access help</a></div>
+</section>
+{% endblock %}

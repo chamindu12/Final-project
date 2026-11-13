@@ -1,51 +1,62 @@
+{% from "components.html" import icon %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{% endblock %} | NetLab {{ role|capitalize }} Portal</title>
-<style>
-  :root { --accent: {{ '#0f766e' if role == 'staff' else '#b45309' }}; --soft: {{ '#ccfbf1' if role == 'staff' else '#fef3c7' }}; --ink: #0f172a; --muted: #64748b; --line: #e5e9f0; }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: #f3f5f9; color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
-  header { background: var(--accent); color: #fff; padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
-  header form { margin: 0; display: flex; align-items: center; gap: 12px; }
-  main { max-width: 860px; margin: 24px auto; padding: 0 16px; }
-  .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 18px; }
-  .card h2 { margin: 0 0 10px; font-size: 16px; }
-  .zone { background: var(--soft); border-color: transparent; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  .muted { color: var(--muted); font-size: 13px; }
-  label { display: block; font-weight: 600; margin: 10px 0 4px; }
-  input[type=text], input[type=password], input[type=file], textarea { width: 100%; padding: 9px 11px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; background: #fff; }
-  button, .btn { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; cursor: pointer; text-decoration: none; display: inline-block; }
-  button.plain { background: transparent; border: 1px solid #fff; padding: 5px 12px; }
-  .error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
-  table { width: 100%; border-collapse: collapse; }
-  td, th { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
-  ul.plain { padding-left: 18px; margin: 0; }
-  .row { display: flex; gap: 10px; flex-wrap: wrap; }
-</style>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/netlab.css') }}">
+<script src="{{ url_for('static', filename='js/portal.js') }}" defer></script>
 </head>
-<body>
-<header>
-  <h1>NetLab {{ role|capitalize }} Portal</h1>
-  {% if user %}
-  <form method="post" action="/logout">
-    <span>Signed in as <strong>{{ user }}</strong></span>
+<body data-role="{{ role }}">
+<a class="skip-link" href="#main">Skip to content</a>
+{% macro brand() -%}
+<a class="brand" href="{{ url_for('home') }}"><span class="brand-mark" aria-hidden="true">N</span><span>NetLab<small>{{ 'STAFF WORKSPACE' if role == 'staff' else 'GUEST ACCESS' }}</small></span></a>
+{%- endmacro %}
+{% macro account() -%}
+<div class="user-menu">
+  <span class="user-avatar" aria-hidden="true">{{ user[0]|upper }}</span>
+  <span class="user-name">{{ user }}</span>
+  <form class="logout-form" method="post" action="{{ url_for('logout') }}" data-submit-form>
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button class="plain" type="submit">Sign out</button>
+    <button class="button button-quiet button-small" type="submit">{{ icon('logout') }} Sign out</button>
   </form>
-  {% endif %}
-</header>
-<main>
-  <div class="card zone">
-    <strong>Your network position</strong>
-    <div class="mono">address {{ client.ip }} &middot; zone {{ client.zone }}</div>
-    <!-- Seen by the gateway (nginx-proxy). The zone decides which portals this address may reach. -->
-  </div>
-  {% block content %}{% endblock %}
+</div>
+{%- endmacro %}
+{% if user and role == 'staff' %}
+<aside class="sidebar" aria-label="Staff workspace">
+  {{ brand() }}
+  <p class="nav-label">Workspace</p>
+  <nav class="workspace-nav" aria-label="Main navigation">
+    <a href="#overview" aria-current="location">{{ icon('grid') }} Overview</a>
+    <a href="#notices">{{ icon('note') }} Notice board</a>
+    <a href="#files">{{ icon('folder') }} Shared files</a>
+    <a href="#connection">{{ icon('network') }} Connection test</a>
+  </nav>
+  <div class="sidebar-bottom"><p>Need a hand?</p><a href="{{ url_for('help_page') }}">Help &amp; access information</a></div>
+</aside>
+<div class="workspace-body">
+  <header class="workspace-topbar"><span class="breadcrumb">NetLab &nbsp;/&nbsp; <strong>Staff workspace</strong></span>{{ account() }}</header>
+{% elif user %}
+<header class="site-header guest-header"><div class="site-header-inner">{{ brand() }}{{ account() }}</div></header>
+{% else %}
+{% block public_header %}<header class="site-header"><div class="site-header-inner">{{ brand() }}<a class="header-link" href="{{ url_for('help_page') }}">{{ icon('help') }} Access help</a></div></header>{% endblock %}
+{% endif %}
+<main id="main" class="{% block main_class %}{{ 'workspace-main' if user and role == 'staff' else 'guest-main' if user else 'public-main' }}{% endblock %}">
+{% set feedback = get_flashed_messages(with_categories=true) %}
+  {% for category, message in feedback if category not in ["upload-success", "note-success", "note-error"] %}
+  <div class="message{{ ' message-error' if category == 'error' else '' }}" role="{{ 'alert' if category == 'error' else 'status' }}">{{ icon('info' if category == 'error' else 'check') }}<p>{{ message }}</p></div>
+  {% endfor %}
+{% block content %}{% endblock %}
+{% if user %}
+<details class="connection-details">
+  <summary>{{ icon('network') }} Connection details</summary>
+  <p class="mono">address {{ client.ip }} &middot; zone {{ client.zone }}</p>
+  <p class="muted">Reported by the gateway. Network rules determine which access areas this connection can reach.</p>
+</details>
+<footer class="portal-footer"><span>NetLab &middot; {{ role|capitalize }} portal</span><a href="{{ url_for('help_page') }}">Help &amp; access information</a></footer>
+{% endif %}
 </main>
+{% if user and role == 'staff' %}</div>{% endif %}
 </body>
 </html>

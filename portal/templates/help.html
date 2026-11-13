@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Access help{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="help-title">
+  <p class="eyebrow">NetLab support information</p><h1 id="help-title">A little help getting started.</h1>
+  <p class="muted">You are using the {{ role }} portal.</p>
+  <section class="help-section"><h2>Use the right account</h2><p>{{ 'Staff accounts belong to this workspace. Guest and administrator accounts cannot sign in here.' if role == 'staff' else 'Use the visitor account provided for your visit. Staff and administrator accounts cannot sign in here.' }} Contact your NetLab administrator if you need an account or a password change. No self-service password reset is available.</p></section>
+  <section class="help-section"><h2>Check your connection</h2><p>Network access rules determine which portals you can reach. A valid password does not override those rules. If access is denied, use the correct network or ask your administrator for assistance.</p></section>
+  <section class="help-section"><h2>Sign in again when needed</h2><p>Sessions expire and are revoked when you sign out. If an action asks you to sign in again, reopen the sign-in page. If you receive a request error, reload the form before submitting it.</p></section>
+  {% if role == 'staff' %}<section class="help-section"><h2>Share files without overwriting</h2><p>Use a unique filename. If the name is already in use, the existing file is kept. Choose a smaller file if your upload exceeds the request limit. After a connection error, check the file list before trying another upload.</p></section>{% endif %}
+  <section class="help-section"><h2>Understand test downloads</h2><p>A test download sends a fixed-size file through the gateway. It generates traffic for monitoring; it does not measure your internet connection speed.</p></section>
+  <a class="button" href="{{ url_for('home') }}">Return to portal {{ icon('arrow') }}</a>
+</section>
+{% endblock %}
