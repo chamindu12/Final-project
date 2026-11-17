@@ -33,12 +33,20 @@ volumes:
   staff_sessions:
   guest_sessions:
 
+# Retained Docker stdout/stderr; older output rotates after about 30 MiB per service.
+x-logging: &container-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   nginx-web:
     build: ./services/reverse-proxy
     image: netlab/nginx:1.30.6-secure
     container_name: nginx-web
     restart: unless-stopped
+    logging: *container-logging
     networks:
       lab_net:
         ipv4_address: 172.20.0.10
@@ -65,6 +73,7 @@ services:
     image: netlab/dnsmasq:1.0
     container_name: dnsmasq
     restart: unless-stopped
+    logging: *container-logging
     networks:
       lab_net:
         ipv4_address: 172.20.0.53
@@ -93,6 +102,7 @@ services:
     image: netlab/dashboard:1.0
     container_name: dashboard
     restart: unless-stopped
+    logging: *container-logging
     networks:
       lab_net:
         ipv4_address: 172.20.0.20
@@ -132,6 +142,7 @@ services:
     image: netlab/portal:1.0
     container_name: staff-portal
     restart: unless-stopped
+    logging: *container-logging
     environment:
       PORTAL_ROLE: staff
       PORTAL_USERS: ${STAFF_USERS:?Set STAFF_USERS in .env (name:password,name:password)}
@@ -167,6 +178,7 @@ services:
     image: netlab/portal:1.0
     container_name: guest-portal
     restart: unless-stopped
+    logging: *container-logging
     environment:
       PORTAL_ROLE: guest
       PORTAL_USERS: ${GUEST_USERS:?Set GUEST_USERS in .env (name:password,name:password)}
@@ -204,6 +216,7 @@ services:
     image: netlab/cadvisor:0.60.6-secure
     container_name: cadvisor
     restart: unless-stopped
+    logging: *container-logging
     command:
       - --docker_only=true
       - --housekeeping_interval=15s
@@ -233,6 +246,7 @@ services:
     image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
     container_name: prometheus
     restart: unless-stopped
+    logging: *container-logging
     depends_on:
       cadvisor:
         condition: service_healthy
@@ -266,6 +280,7 @@ services:
     image: grafana/grafana:12.4.14@sha256:ae509d9ae8c1021ca32ec370a9ca975d40165eda9fccd1e1102d317ff8787cd7
     container_name: grafana
     restart: unless-stopped
+    logging: *container-logging
     depends_on:
       prometheus:
         condition: service_healthy
@@ -307,6 +322,7 @@ services:
     image: netlab/nginx:1.30.6-secure
     container_name: nginx-proxy
     restart: unless-stopped
+    logging: *container-logging
     depends_on:
       nginx-web:
         condition: service_healthy
@@ -365,6 +381,7 @@ services:
     container_name: staff-client
     hostname: staff-pc
     restart: unless-stopped
+    logging: *container-logging
     networks:
       staff_net:
         ipv4_address: 172.22.0.10
@@ -386,6 +403,7 @@ services:
     container_name: isolated-test
     hostname: guest-pc
     restart: unless-stopped
+    logging: *container-logging
     networks:
       isolated_net:
         ipv4_address: 172.21.0.10

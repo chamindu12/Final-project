@@ -15,11 +15,12 @@ from urllib.request import urlopen
 
 import docker
 from docker.errors import DockerException, NotFound
-from flask import Flask, jsonify, redirect, render_template, request, session
+from flask import Flask, Response, jsonify, redirect, render_template, request, session
 
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from session_store import SessionStore
+from log_stream import LogCapacityError, log_lines, subscribe, utc_now
 
 SECURE_COOKIES = os.environ.get("SESSION_COOKIE_SECURE", "1")
 if SECURE_COOKIES != "1":
@@ -366,6 +367,7 @@ def api_index():
             "GET /api/metrics/history?name=<container>&minutes=5",
             "GET /api/containers/<name>/stats",
             "GET /api/containers/<name>/logs?tail=100",
+            "GET /api/containers/<name>/logs/stream?tail=100 (server-sent events)",
             "POST /api/containers/<name>/start|stop|restart "
             "(needs header X-Requested-With: dashboard-ui)",
         ],
@@ -558,8 +560,32 @@ def container_logs(name):
     except ValueError:
         return jsonify({"error": "tail must be a number"}), 400
     tail = max(1, min(tail, MAX_LOG_LINES))
-    raw = c.logs(tail=tail, timestamps=True).decode("utf-8", errors="replace")
-    return jsonify({"name": name, "lines": raw.splitlines()})
+    raw = c.logs(tail=tail, timestamps=True)
+    lines = list(log_lines([raw]))[-tail:]
+    return jsonify({"name": c.name, "lines": lines,
+                    "container_id": c.attrs.get("Id", c.short_id),
+                    "timestamp_basis": "Docker UTC", "fetched_at": utc_now()})
+
+
+@app.get("/api/containers/<name>/logs/stream")
+def container_log_stream(name):
+    c = get_container(name)
+    try:
+        tail = int(request.args.get("tail", 100))
+    except ValueError:
+        return jsonify({"error": "tail must be a number"}), 400
+    tail = max(1, min(tail, MAX_LOG_LINES))
+    user, sid = session.get("user"), session.get("sid")
+    password = ADMIN_USERS.get(user)
+    try:
+        subscription = subscribe(c, tail, lambda: auth_sessions.valid(sid, user, password))
+    except LogCapacityError as exc:
+        return jsonify({"error": str(exc)}), 503
+    response = Response(subscription.events(), mimetype="text/event-stream", headers={
+        "Cache-Control": "no-store", "X-Accel-Buffering": "no",
+    })
+    response.call_on_close(subscription.close)
+    return response
 
 
 @app.post("/api/containers/<name>/<action>")
