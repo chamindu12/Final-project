@@ -9,6 +9,7 @@
       this.api = options.api || "api";
       this.EventSource = options.EventSource || root.EventSource;
       this.onExpired = options.onExpired;
+      this.isVisible = options.isVisible || (() => !root.document || !root.document.hidden);
       this.generation = 0;
       this.lines = [];
       this.name = null;
@@ -49,6 +50,7 @@
       this.failures = 0;
       this.render(true);
       if (!name) { this.status("Select a container."); return; }
+      if (!this.isVisible()) { this.status("Paused while this tab is hidden."); return; }
       const generation = this.generation;
       if (this.ui.live.checked && this.EventSource) this.connect(generation);
       else this.poll(generation);

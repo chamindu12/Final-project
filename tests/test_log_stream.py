@@ -190,3 +190,22 @@ def test_gateway_stream_and_readable_log_rotation_are_configured():
     assert 'log_format zonelog escape=json' in nginx
     assert '"$request"' not in nginx
     assert 'log-queries=extra' in (root / 'services/dns/dnsmasq.conf').read_text()
+
+
+def test_connection_lifetime_rotation_closes_source_and_releases_capacity(monkeypatch):
+    monkeypatch.setattr(log_stream, 'STREAM_SECONDS', 0)
+    release = MagicMock()
+    source = Source([b'old tail\n'])
+    sub = log_stream.LogSubscription(source, {}, lambda: True, release)
+    events = list(sub.events())
+    assert [unpack(e)[0] for e in events] == ['reset', 'end']
+    assert unpack(events[-1])[1]['reason'] == 'rotate'
+    assert source.closed
+    release.assert_called_once()
+
+
+def test_viewer_controller_is_served_and_loaded_before_dashboard_code(client):
+    response = dash.app.test_client().get('/static/js/logs.js')
+    assert response.status_code == 200 and b'class NetLabLogViewer' in response.data
+    html = client[0].get('/').get_data(as_text=True)
+    assert html.index('static/js/logs.js') < html.index('static/js/app.js')

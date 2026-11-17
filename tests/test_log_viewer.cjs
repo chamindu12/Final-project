@@ -125,3 +125,12 @@ test("fallback polling has at most one in-flight request and stop ignores its co
   viewer.stop(); resolve({ lines: ["late"] }); await turn();
   assert.deepEqual(viewer.lines, []); assert.equal(viewer.timer, null);
 });
+
+test("a container-list reply arriving after the tab is hidden cannot reopen a stream", (t) => {
+  let requests = 0;
+  const { viewer, ui } = setup(t, { isVisible: () => false,
+    getJSON: async () => { requests++; return { lines: [] }; } });
+  viewer.open("staff-portal", 100);
+  assert.equal(viewer.source, null); assert.equal(requests, 0);
+  assert.match(ui.status.textContent, /tab is hidden/);
+});
