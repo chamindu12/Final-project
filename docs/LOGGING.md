@@ -93,7 +93,7 @@ the gateway response request ID rather than relying on logged query strings.
 
 Python regressions run with `bash scripts/ui-tests.sh`. JavaScript race/retention
 tests run with `node --test tests/test_log_viewer.cjs` (Node.js 20 or newer); CI runs
-them separately even if Node is absent from the development host.
+them separately if Node.js 20+ is unavailable on the development host.
 
 Implementation references: [Docker SDK logs](https://docker-py.readthedocs.io/en/stable/containers.html),
 [Flask streaming](https://flask.palletsprojects.com/en/stable/patterns/streaming/),

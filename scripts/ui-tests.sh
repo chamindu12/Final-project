@@ -2,10 +2,11 @@
 # Run the complete Python regression suite without changing host Python packages.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-if command -v node >/dev/null 2>&1; then
+if command -v node >/dev/null 2>&1 &&
+  node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)'; then
   node --test tests/test_log_viewer.cjs
 else
-  echo "Node.js not installed: log-viewer JavaScript tests run in GitHub CI."
+  echo "Node.js 20+ unavailable: log-viewer JavaScript tests run in GitHub CI."
 fi
 docker run --rm \
   -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 \
