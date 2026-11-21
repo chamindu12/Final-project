@@ -16,4 +16,4 @@ COPY static static
 RUN mkdir -p /sessions && chown 10001:10001 /sessions
 USER 10001
 EXPOSE 5000
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", "--error-logfile", "-", "--capture-output", "app:app"]

@@ -9,7 +9,7 @@ RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin appu
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py session_store.py ./
+COPY app.py session_store.py log_stream.py ./
 COPY templates templates
 COPY static static
 RUN mkdir -p /sessions && chown 10001:10001 /sessions

@@ -38,7 +38,9 @@ def test_deploy_recreates_all_services_and_checks_tls(tmp_path, monkeypatch, arg
     assert '--force-recreate' in deployment
     assert '--no-deps' not in deployment  # Monitoring direct bindings must also be removed.
     assert 'docker-compose.https.yml' not in deployment
-    assert any(' build dashboard staff-portal' in line for line in lines)
+    build = next(line for line in lines if line.startswith('docker compose build '))
+    assert {'dashboard', 'staff-portal', 'dnsmasq'} <= set(build.split()[3:])
+    assert lines.index(build) < lines.index(deployment)
     for checker in ('https-check.py', 'ui-smoke-check.py', 'auth-check.py'):
         assert any(checker in line and '--ca-file' in line for line in lines)
 

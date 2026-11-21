@@ -54,13 +54,16 @@ jobs:
           COVERAGE_FILE: security-reports/coverage/.coverage
         run: |
           pip install -r dashboard/requirements.txt -r portal/requirements.txt flake8 pytest coverage PyYAML
-          flake8 dashboard/app.py dashboard/session_store.py portal/app.py portal/session_store.py tests scripts/https-check.py scripts/tls-setup.py scripts/auth-check.py --max-line-length=100
+          flake8 dashboard/app.py dashboard/session_store.py dashboard/log_stream.py portal/app.py portal/session_store.py tests scripts/https-check.py scripts/tls-setup.py scripts/auth-check.py scripts/logs-check.py --max-line-length=100
           mkdir -p security-reports/coverage
           python -m coverage run --branch --source=dashboard,portal -m pytest tests -q
           python -m coverage report -m
           python -m coverage json -o security-reports/coverage/coverage.json
           python -m coverage xml -o security-reports/coverage/coverage.xml
           python -m coverage html -d security-reports/coverage/html
+
+      - name: Log viewer JavaScript regressions
+        run: node --test tests/test_log_viewer.cjs
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
@@ -216,6 +219,9 @@ jobs:
 
       - name: Scenario policy checks (admin, staff, guest)
         run: bash scripts/scenario-check.sh
+
+      - name: Verify authenticated live portal, gateway and DNS logs
+        run: python3 scripts/logs-check.py --ca-file "$HOME/NetLab-certs/netlab.crt"
 
       - name: Show logs on failure
         if: failure()

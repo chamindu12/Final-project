@@ -11,8 +11,9 @@ printf '2/6 Preparing and validating local TLS...\n'
 python3 scripts/tls-setup.py
 printf '3/6 Checking HTTPS Compose and Nginx before deployment...\n'
 bash scripts/ui-check-config.sh
-printf '4/6 Building dashboard and shared portal image...\n'
-docker compose build dashboard staff-portal
+printf '4/6 Building dashboard, shared portal and DNS images...\n'
+# dnsmasq.conf is copied into the DNS image; recreating an old image is insufficient.
+docker compose build dashboard staff-portal dnsmasq
 printf '5/6 Recreating the complete stack, retaining existing named volumes...\n'
 docker compose up -d --no-build --pull never --force-recreate --wait --wait-timeout 180
 printf '6/6 Checking live HTTPS endpoints and authentication...\n'
