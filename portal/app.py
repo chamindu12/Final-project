@@ -7,16 +7,21 @@ import functools
 import hashlib
 import hmac
 import json
+import logging
 import os
+import re
 import secrets
 import sqlite3
 import tempfile
 import threading
+import time
+import sys
+import uuid
 from datetime import datetime, timezone
 from datetime import timedelta
 from pathlib import Path
 
-from flask import (Flask, Response, abort, flash, jsonify, redirect, render_template,
+from flask import (Flask, Response, abort, flash, g, jsonify, redirect, render_template,
                    request, send_from_directory, session, stream_with_context, url_for)
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -106,6 +111,47 @@ if CAN_WRITE:
 
 _lock = threading.Lock()
 
+# One flushed JSON record per application request. Never log credentials, request
+# bodies, cookie/session values, query strings, notice text or uploaded filenames.
+request_logger = logging.getLogger(f"netlab.portal.{ROLE}")
+request_logger.setLevel(logging.INFO)
+request_logger.propagate = False
+if not request_logger.handlers:
+    request_logger.addHandler(logging.StreamHandler(sys.stdout))
+
+
+@app.before_request
+def begin_request_log():
+    g.request_started = time.monotonic()
+    candidate = request.headers.get("X-Request-ID", "")
+    g.request_id = candidate if re.fullmatch(r"[a-f0-9]{32}", candidate) else uuid.uuid4().hex
+    g.log_event = "http_request"
+    g.log_user = None
+
+
+@app.after_request
+def record_request(resp):
+    resp.headers["X-Request-ID"] = g.request_id
+    if resp.status_code < 400 and (
+            request.path == "/api/health" or request.path.startswith("/static/")):
+        return resp
+    level = "error" if resp.status_code >= 500 else "warning" if resp.status_code >= 400 else "info"
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z"),
+        "level": level, "service": f"{ROLE}-portal", "role": ROLE,
+        "event": g.log_event, "request_id": g.request_id,
+        "method": request.method,
+        "route": request.url_rule.rule if request.url_rule else "<unmatched>",
+        "status": resp.status_code,
+        "response_ms": round((time.monotonic() - g.request_started) * 1000, 3),
+        "user": g.log_user,
+        "client_ip": client_info()["ip"][:64],
+        "zone": client_info()["zone"][:32],
+    }
+    request_logger.info(json.dumps(record, ensure_ascii=True))
+    return resp
+
 
 # ---------- helpers ----------
 def csrf_token():
@@ -127,6 +173,7 @@ def current_user():
     password = USERS.get(name) if isinstance(name, str) else None
     if (session.get("role") == ROLE
             and auth_sessions.valid(session.get("sid"), name, password)):
+        g.log_user = name
         return name
     if "user" in session or "sid" in session:
         session.clear()
@@ -137,6 +184,7 @@ def login_required(view):
     @functools.wraps(view)
     def wrapped(*args, **kwargs):
         if not current_user():
+            g.log_event = "authentication_required"
             if request.path.startswith(("/api/", "/speedtest", "/files", "/guide")):
                 return jsonify({"error": "login required"}), 401
             return redirect(url_for("login"))
@@ -181,6 +229,7 @@ def check_csrf():
     if request.method == "POST":
         sent = request.form.get("csrf_token", "")
         if not sent or not hmac.compare_digest(sent.encode(), session.get("csrf", "").encode()):
+            g.log_event = "csrf_rejected"
             abort(400, "Invalid or missing CSRF token. Reload the page and try again.")
 
 
@@ -256,7 +305,10 @@ def login():
             session["sid"] = auth_sessions.create(
                 name, expected, SESSION_TTL_SECONDS)
             csrf_token()
+            g.log_event = "login_succeeded"
+            g.log_user = name
             return redirect(url_for("home"))
+        g.log_event = "login_failed"
         return render_template("login.html", error="Invalid username or password."), 401
     return render_template("login.html", error=None)
 
@@ -264,6 +316,7 @@ def login():
 @app.post("/logout")
 @login_required
 def logout():
+    g.log_event = "logout_succeeded"
     auth_sessions.revoke(session.get("sid"))
     session.clear()
     return redirect(url_for("login"))
@@ -303,6 +356,7 @@ def speedtest():
     except ValueError:
         return jsonify({"error": "mb must be a whole number"}), 400
     if not 1 <= mb <= SPEEDTEST_MAX_MB:
+        g.log_event = "download_limit_rejected"
         return jsonify({"error": f"the {ROLE} portal allows 1 to {SPEEDTEST_MAX_MB} MB"}), 403
     chunk = b"x" * 65536
     total = mb * 1024 * 1024
@@ -311,6 +365,7 @@ def speedtest():
         for _ in range(total // len(chunk)):
             yield chunk
 
+    g.log_event = "test_download_requested"
     return Response(stream_with_context(generate()), mimetype="application/octet-stream",
                     headers={"Content-Length": str(total),
                              "Content-Disposition": f'attachment; filename="test-{mb}MB.bin"'})
@@ -327,8 +382,10 @@ if CAN_WRITE:
                 notes.append({"user": current_user(), "text": text,
                               "time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")})
                 save_notes(notes)
+            g.log_event = "note_created"
             flash("Your note was posted to the staff notice board.", "note-success")
         else:
+            g.log_event = "empty_note_rejected"
             flash("Write a note before posting.", "note-error")
         return redirect(url_for("home", _anchor="notices"))
 
@@ -348,8 +405,10 @@ if CAN_WRITE:
             try:
                 os.link(staged, FILES_DIR / name)
             except FileExistsError:
+                g.log_event = "upload_conflict"
                 abort(409, "A file with this name already exists. Existing file was kept. "
                            "Rename your file and try again.")
+        g.log_event = "upload_succeeded"
         flash("Your file was uploaded. The shared file list has been updated.", "upload-success")
         if request.accept_mimetypes.best_match(
                 ["text/html", "application/json"]) == "application/json":
@@ -359,10 +418,12 @@ if CAN_WRITE:
     @app.get("/files/<name>")
     @login_required
     def download(name):
+        g.log_event = "file_download_requested"
         return send_from_directory(FILES_DIR, name, as_attachment=True)
 else:
     @app.get("/guide.txt")
     @login_required
     def guide():
+        g.log_event = "guide_download_requested"
         return Response(VISITOR_GUIDE, mimetype="text/plain",
                         headers={"Content-Disposition": 'attachment; filename="visitor-guide.txt"'})

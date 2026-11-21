@@ -2,7 +2,7 @@ import csv
 import sys
 import importlib.util
 import json
-import secrets
+import re
 import ssl
 import os
 import statistics
@@ -45,11 +45,10 @@ try:
 
         for trial in range(1, 6):
             time.sleep(2)
-            marker = "netlab-probe-" + secrets.token_hex(12)
             start = time.monotonic()
 
             with urlopen(
-                origin + "/web/?probe=" + marker,
+                origin + "/web/",
                 context=context,
                 timeout=15,
             ) as response:
@@ -59,6 +58,9 @@ try:
                     or b"NetLab Network Services" not in body
                 ):
                     raise RuntimeError("Probe page validation failed")
+                marker = response.headers.get("X-Request-ID", "")
+                if not re.fullmatch(r"[a-f0-9]{32}", marker):
+                    raise RuntimeError("Gateway did not return a valid request ID")
 
             response_done = time.monotonic()
             deadline = response_done + 30
@@ -83,11 +85,17 @@ try:
                 ):
                     raise RuntimeError("Invalid log API response")
 
-                if any(
-                    f"probe={marker} " in line
-                    and '"GET /web/?probe=' in line
-                    for line in lines
-                ):
+                records = []
+                for line in lines:
+                    try:
+                        record = json.loads(line.partition(" ")[2])
+                        if isinstance(record, dict):
+                            records.append(record)
+                    except ValueError:
+                        continue
+                if any(record.get("request_id") == marker
+                       and record.get("event") == "gateway_request"
+                       and record.get("method") == "GET" for record in records):
                     observed = time.monotonic()
                     delay = observed - start
                     writer.writerow([

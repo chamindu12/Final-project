@@ -3,6 +3,15 @@
 NetLab combines Nginx web/proxy services, DNS, a Flask administration dashboard,
 staff/guest portals, and cAdvisor/Prometheus/Grafana on isolated Docker bridge networks.
 
+## Live container logs
+
+The administrator dashboard follows Docker stdout/stderr with UTC timestamps,
+container identity, pause/filter/auto-scroll controls and a bounded recent tail.
+Staff/guest portals record structured actions and response status; gateway requests
+can be correlated using `X-Request-ID`. DNS queries are also logged. See
+[container logging and verification](docs/LOGGING.md) for deployment, retention,
+privacy boundaries and the authenticated HTTPS live-log check.
+
 ## HTTPS-only operation
 
 All browser-facing services use HTTPS. There is one deployment configuration,

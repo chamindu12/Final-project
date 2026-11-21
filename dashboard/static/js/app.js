@@ -6,7 +6,6 @@
   const CSRF = { "X-Requested-With": "dashboard-ui" };
   const LIST_MS = 3000;
   const STATS_GAP_MS = 1000;
-  const LOG_MS = 2000;
   const MONITORING_MS = 10000;
   const HISTORY_REFRESH_MS = 15000;
   const MAX_CONTIGUOUS_GAP_MS = 10000;
@@ -26,7 +25,6 @@
     pending: new Set(),
     lastOk: 0,
     engineOk: null,
-    logLines: [],
   };
 
   const $ = (id) => document.getElementById(id);
@@ -622,7 +620,6 @@
     refreshChart();
     loadChartHistory();
     syncLogSelect();
-    state.logLines = [];
     loadLogs();
   }
 
@@ -648,54 +645,30 @@
     if (state.selected) sel.value = state.selected;
   }
 
-  function levelClass(line) {
-    if (/\b(error|fatal|crit|critical|emerg|panic)\b/i.test(line)) return "err";
-    if (/\b(warn|warning)\b/i.test(line)) return "warn";
-    return "";
+  const logViewer = new window.NetLabLogViewer({
+    api: API, getJSON: getJSON,
+    onExpired: () => { window.location.href = "login"; },
+    ui: { box: $("logBox"), meta: $("logMeta"), status: $("logStatus"),
+      filter: $("logFilter"), live: $("logFollow"), autoscroll: $("logAutoscroll") },
+  });
+
+  function loadLogs() {
+    logViewer.open(state.selected, $("logTail").value);
   }
 
-  function renderLogs(first) {
-    const box = $("logBox");
-    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-    const q = $("logFilter").value.trim().toLowerCase();
-    const lines = state.logLines;
-    const shown = q ? lines.filter((l) => l.toLowerCase().indexOf(q) !== -1) : lines;
-    if (!shown.length) {
-      box.textContent = lines.length ? "No lines match the filter." : "No log lines yet.";
-    } else {
-      const frag = document.createDocumentFragment();
-      shown.forEach((l) => {
-        const div = document.createElement("div");
-        div.className = "ll " + levelClass(l);
-        div.textContent = l; // textContent: log lines are never treated as HTML
-        frag.appendChild(div);
-      });
-      box.replaceChildren(frag);
-    }
-    if (first || nearBottom) box.scrollTop = box.scrollHeight;
-    $("logMeta").textContent = shown.length + " of " + lines.length + " lines \u00b7 " +
-      (state.selected || "-") + " \u00b7 refreshed " + new Date().toLocaleTimeString([], { hour12: false });
-  }
-
-  async function loadLogs() {
-    if (!state.selected) return;
-    const name = state.selected;
-    try {
-      const d = await getJSON(API + "/containers/" + enc(name) + "/logs?tail=" + $("logTail").value);
-      if (name !== state.selected) return; // selection changed while loading
-      const first = state.logLines.length === 0;
-      state.logLines = d.lines;
-      renderLogs(first);
-    } catch (e) {
-      $("logBox").textContent = "Could not load logs: " + e.message;
-    }
-  }
-
-  setInterval(() => { if ($("logFollow").checked && !document.hidden) loadLogs(); }, LOG_MS);
   $("logRefresh").addEventListener("click", loadLogs);
-  $("logTail").addEventListener("change", () => { state.logLines = []; loadLogs(); });
-  $("logFilter").addEventListener("input", () => renderLogs(false));
+  $("logTail").addEventListener("change", loadLogs);
+  $("logFollow").addEventListener("change", loadLogs);
+  $("logFilter").addEventListener("input", () => logViewer.render(false));
+  $("logAutoscroll").addEventListener("change", () => logViewer.render(true));
   $("logContainer").addEventListener("change", (ev) => select(ev.target.value));
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      logViewer.stop();
+      logViewer.status("Paused while this tab is hidden.");
+    } else loadLogs();
+  });
+  window.addEventListener("pagehide", () => logViewer.stop());
 
   /* ---------- live indicator ---------- */
   setInterval(() => {
